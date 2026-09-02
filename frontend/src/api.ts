@@ -12,7 +12,7 @@ const RAW =
 
 export const API = `${RAW}/api`;
 
-export const TOKEN_KEY = "freepress.jwt";
+export const TOKEN_KEY = "azadi.jwt";
 
 export class ApiError extends Error {
   status: number;

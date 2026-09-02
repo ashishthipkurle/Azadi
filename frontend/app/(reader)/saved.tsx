@@ -32,7 +32,7 @@ type SavedPost = {
   media?: MediaAttachment[];
 };
 
-const CACHE_KEY = "freepress.bookmarks.cache";
+const CACHE_KEY = "azadi.bookmarks.cache";
 
 export default function Saved() {
   const router = useRouter();

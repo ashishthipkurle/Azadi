@@ -23,7 +23,7 @@ import database as db
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
-app = FastAPI(title="FreePress API")
+app = FastAPI(title="Azadi API")
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 password_hash = PasswordHash.recommended()

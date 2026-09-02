@@ -66,7 +66,7 @@ function buildHtml(order: CheckoutOrder, name: string, email: string, reporter: 
   var opts = {
     key: ${JSON.stringify(order.key_id)},
     ${!isMonthly ? `amount: ${JSON.stringify(order.amount)}, currency: ${JSON.stringify(order.currency)},` : ""}
-    name: "FreePress",
+    name: "Azadi",
     description: ${JSON.stringify(description)},
     ${orderField},
     prefill: { name: ${JSON.stringify(name)}, email: ${JSON.stringify(email)} },

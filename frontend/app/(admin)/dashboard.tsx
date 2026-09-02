@@ -128,7 +128,10 @@ export default function AdminDashboard() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.wordmark}>freepress</Text>
+          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+            <Text style={styles.wordmark}>azadi</Text>
+            <View style={styles.signalDot} />
+          </View>
           <Text style={styles.kicker}>TRUST & SAFETY</Text>
         </View>
         <Pressable testID="admin-logout-button" onPress={logout} style={styles.avatar}>
@@ -286,6 +289,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   wordmark: { color: C.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
+  signalDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red, marginLeft: 4, marginTop: 6 },
   kicker: { fontSize: 9, letterSpacing: 2, color: C.muted, marginTop: 4, fontWeight: "800" },
   avatar: { backgroundColor: C.ink, borderRadius: 20, width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   content: { padding: 20, paddingBottom: 60 },

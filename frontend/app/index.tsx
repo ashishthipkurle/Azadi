@@ -75,7 +75,7 @@ export default function Index() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.brand}>
-            <Text style={styles.wordmark}>freepress</Text>
+            <Text style={styles.wordmark}>azadi</Text>
             <View style={styles.signalDot} />
           </View>
 
@@ -197,9 +197,9 @@ export default function Index() {
               {mode === "login" ? (
                 <View style={styles.demoBox}>
                   <Overline>TRY THE PLATFORM</Overline>
-                  <Text style={styles.demoLine}>Admin · admin@freepress.in / admin123</Text>
-                  <Text style={styles.demoLine}>Reporter · rhea@freepress.in / reporter123</Text>
-                  <Text style={styles.demoLine}>Reader · reader@freepress.in / reader123</Text>
+                  <Text style={styles.demoLine}>Admin · admin@azadi.in / admin123</Text>
+                  <Text style={styles.demoLine}>Reporter · rhea@azadi.in / reporter123</Text>
+                  <Text style={styles.demoLine}>Reader · reader@azadi.in / reader123</Text>
                 </View>
               ) : null}
             </>

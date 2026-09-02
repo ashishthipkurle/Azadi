@@ -58,6 +58,16 @@ type LiveSession = {
 
 const CATEGORIES = ["All", "Field report", "Photo essay", "Dispatch"];
 
+const getCategoryIcon = (c: string, active: boolean): any => {
+  switch (c) {
+    case "All": return active ? "newspaper" : "newspaper-outline";
+    case "Field report": return active ? "map" : "map-outline";
+    case "Photo essay": return active ? "camera" : "camera-outline";
+    case "Dispatch": return active ? "flash" : "flash-outline";
+    default: return active ? "list" : "list-outline";
+  }
+};
+
 export default function Feed() {
   const router = useRouter();
   const { user } = useAuth();
@@ -197,7 +207,10 @@ export default function Feed() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.wordmark}>freepress</Text>
+          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+            <Text style={styles.wordmark}>azadi</Text>
+            <View style={styles.signalDot} />
+          </View>
           <Text style={styles.kicker}>THE DISPATCH WALL</Text>
         </View>
         <Pressable testID="reader-menu-button" onPress={() => setMenuOpen(true)} style={styles.avatar}>
@@ -262,19 +275,6 @@ export default function Feed() {
               </ScrollView>
             </View>
           ) : null}
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {CATEGORIES.map((c, i) => (
-              <Pressable
-                key={c}
-                testID={`feed-chip-${i}`}
-                onPress={() => setCategory(i)}
-                style={[styles.chip, i === category && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, i === category && styles.chipTextActive]}>{c}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
 
           {filtered.length === 0 ? (
             <EmptyState
@@ -406,6 +406,25 @@ export default function Feed() {
         </ScrollView>
       )}
 
+      {!loading && (
+        <View style={styles.bottomBar}>
+          {CATEGORIES.map((c, i) => {
+            const isActive = i === category;
+            return (
+              <Pressable
+                key={c}
+                testID={`feed-chip-${i}`}
+                onPress={() => setCategory(i)}
+                style={styles.bottomNavButton}
+              >
+                <Icon name={getCategoryIcon(c, isActive)} color={isActive ? C.ink : C.muted} size={22} />
+                <Text style={[styles.bottomNavText, isActive && styles.bottomNavTextActive]}>{c}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
       <Modal visible={!!reporting} transparent animationType="slide" onRequestClose={() => setReporting(null)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modal}>
@@ -477,6 +496,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   wordmark: { color: C.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
+  signalDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red, marginLeft: 4, marginTop: 6 },
   kicker: { fontSize: 9, letterSpacing: 2, color: C.muted, marginTop: 4, fontWeight: "800" },
   avatar: { backgroundColor: C.ink, borderRadius: 20, width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   content: { padding: 20, paddingBottom: 60 },
@@ -512,20 +532,24 @@ const styles = StyleSheet.create({
   liveTilePillText: { color: C.surface, fontSize: 9, fontWeight: "800", letterSpacing: 1 },
   liveTileTitle: { color: C.surface, fontSize: 15, fontWeight: "800", lineHeight: 20 },
   liveTileMeta: { color: "#B7BEC5", fontSize: 11 },
-  chipRow: { gap: 8, paddingRight: 20 },
-  chip: {
-    borderWidth: 1,
-    borderColor: C.line,
-    paddingHorizontal: 14,
-    height: 36,
-    justifyContent: "center",
-    borderRadius: 20,
+  bottomBar: {
     backgroundColor: C.surface,
-    flexShrink: 0,
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    paddingTop: 10,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+    flexDirection: "row",
+    justifyContent: "space-between",
   },
-  chipActive: { backgroundColor: C.ink, borderColor: C.ink },
-  chipText: { color: C.muted, fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: C.surface },
+  bottomNavButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  bottomNavText: { color: C.muted, fontSize: 10, fontWeight: "800" },
+  bottomNavTextActive: { color: C.ink },
   post: {
     backgroundColor: C.surface,
     borderTopWidth: 1,
