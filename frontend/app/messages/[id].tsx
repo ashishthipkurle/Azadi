@@ -48,8 +48,15 @@ export default function ChatScreen() {
         apiGet<{ name: string; avatar_url?: string }>(`/users/${otherId}/basic`).catch(() => null)
       ]);
       setMessages(prev => {
-        const tempMessages = prev.filter(m => m.id.startsWith("temp-"));
-        return [...data, ...tempMessages];
+        const dataIds = new Set(data.map(m => m.id));
+        // Keep any messages (temp or real) that are in our local state but missing from the server response
+        // This prevents the "disappearing" glitch if a poll finishes with stale data just after we sent a message.
+        const missingLocals = prev.filter(m => !dataIds.has(m.id));
+        
+        const merged = [...data, ...missingLocals];
+        // Sort ascending by created_at
+        merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        return merged;
       });
       if (uData) setOtherUser(uData);
     } catch {
