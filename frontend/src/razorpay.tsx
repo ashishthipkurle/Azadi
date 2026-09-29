@@ -15,7 +15,8 @@ import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { apiPost, ApiError } from "@/src/api";
-import { C } from "@/src/theme";
+import {   } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 
 export type CheckoutOrder = {
@@ -84,6 +85,8 @@ function buildHtml(order: CheckoutOrder, name: string, email: string, reporter: 
 }
 
 export function RazorpayCheckout({ visible, order, reporterName, userName, userEmail, onDismiss, onResult }: Props) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const html = useMemo(
     () => (order ? buildHtml(order, userName || "", userEmail || "", reporterName) : ""),
     [order, userName, userEmail, reporterName],
@@ -132,7 +135,7 @@ export function RazorpayCheckout({ visible, order, reporterName, userName, userE
         <View style={styles.bar}>
           <Text style={styles.title}>Support · ₹7</Text>
           <Pressable testID="razorpay-close" onPress={onDismiss} hitSlop={12}>
-            <Icon name="close" size={22} color={C.ink} />
+            <Icon name="close" size={22} color={colors.ink} />
           </Pressable>
         </View>
         {order ? (
@@ -143,7 +146,7 @@ export function RazorpayCheckout({ visible, order, reporterName, userName, userE
             onMessage={handleMessage}
             javaScriptEnabled
             domStorageEnabled
-            style={{ flex: 1, backgroundColor: C.paper }}
+            style={{ flex: 1, backgroundColor: colors.paper }}
           />
         ) : null}
       </View>
@@ -151,8 +154,8 @@ export function RazorpayCheckout({ visible, order, reporterName, userName, userE
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.paper },
+const createStyles = (colors: any) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.paper },
   bar: {
     flexDirection: "row",
     alignItems: "center",
@@ -160,9 +163,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: C.line,
-    backgroundColor: C.surface,
+    borderBottomColor: colors.line,
+    backgroundColor: colors.surface,
   },
-  title: { color: C.ink, fontSize: 18, fontWeight: "800" },
+  title: { color: colors.ink, fontSize: 18, fontWeight: "800" },
 });
 

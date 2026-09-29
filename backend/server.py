@@ -118,6 +118,20 @@ class CommentCreate(BaseModel):
     parent_id: Optional[str] = None
 
 
+class Message(BaseModel):
+    id: str
+    sender_id: str
+    receiver_id: str
+    body: str
+    read: bool
+    created_at: str
+
+
+class MessageCreate(BaseModel):
+    body: str
+    encrypted: bool = False
+
+
 def _strip_keys(row: dict | None, keys: list[str]) -> dict | None:
     """Remove unwanted keys from a dict (replaces Mongo projection {\"_id\": 0, \"password_hash\": 0})."""
     if row is None:
@@ -976,6 +990,114 @@ async def resolve_report(report_id: str, user: dict = Depends(require_roles("adm
     if result is None:
         raise HTTPException(404, "Open report not found")
     return {"id": report_id, "status": "resolved"}
+
+
+@api_router.get("/e2ee/keys/{user_id}")
+async def get_e2ee_key(user_id: str):
+    user = await db.find_one("users", {"id": user_id})
+    if not user:
+        raise HTTPException(404, "User not found")
+    if not user.get("public_key"):
+        raise HTTPException(404, "User has no public key")
+    return {"public_key": user["public_key"]}
+
+@api_router.post("/e2ee/keys")
+async def post_e2ee_key(payload: dict, user: dict = Depends(current_user)):
+    public_key = payload.get("public_key")
+    if not public_key:
+        raise HTTPException(400, "Missing public_key")
+    await db.update_one("users", {"id": user["id"]}, {"public_key": public_key})
+    return {"ok": True}
+
+
+@api_router.get("/messages")
+async def get_conversations(user: dict = Depends(current_user)):
+    user_id = user["id"]
+    query = {"$or_string": f"sender_id.eq.{user_id},receiver_id.eq.{user_id}"}
+    all_msgs = await db.find_many("messages", query, order_by="created_at", desc=True)
+    
+    # Group by conversation partner
+    convos = {}
+    for msg in all_msgs:
+        other_id = msg["receiver_id"] if msg["sender_id"] == user_id else msg["sender_id"]
+        if other_id not in convos:
+            convos[other_id] = msg
+    
+    # We also need the other user's info.
+    if not convos:
+        return []
+    other_ids = list(convos.keys())
+    users = await db.find_many("users", {"id": {"$in": other_ids}})
+    user_map = {u["id"]: {"id": u["id"], "name": u["name"], "avatar_url": u.get("avatar_url"), "role": u["role"]} for u in users}
+    
+    result = []
+    for other_id, last_msg in convos.items():
+        if last_msg.get("encrypted"):
+            last_msg["body"] = "🔒 Encrypted message"
+        if other_id in user_map:
+            result.append({
+                "other_user": user_map[other_id],
+                "last_message": last_msg
+            })
+    return result
+
+
+@api_router.get("/messages/{other_id}")
+async def get_messages(other_id: str, user: dict = Depends(current_user)):
+    user_id = user["id"]
+    # Messages where (sender=user AND receiver=other) OR (sender=other AND receiver=user)
+    # PostgREST syntax for complex OR is verbose: or=(and(sender_id.eq.A,receiver_id.eq.B),and(sender_id.eq.B,receiver_id.eq.A))
+    # We can just fetch all for current_user and filter in Python, or construct the complex string.
+    query = {"$or_string": f"and(sender_id.eq.{user_id},receiver_id.eq.{other_id}),and(sender_id.eq.{other_id},receiver_id.eq.{user_id})"}
+    msgs = await db.find_many("messages", query, order_by="created_at", desc=False)
+    
+    # Mark as read if user is receiver
+    unread_ids = [m["id"] for m in msgs if m["receiver_id"] == user_id and not m["read"]]
+    if unread_ids:
+        # Bulk update in supabase-py using `in_` filter
+        sb = db.get_client()
+        sb.table("messages").update({"read": True}).in_("id", unread_ids).execute()
+        for m in msgs:
+            if m["id"] in unread_ids:
+                m["read"] = True
+                
+    return msgs
+
+
+from fastapi import BackgroundTasks
+
+@api_router.post("/messages/{other_id}")
+async def send_message(other_id: str, payload: MessageCreate, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+    msg_data = {
+        "id": str(uuid.uuid4()),
+        "sender_id": user["id"],
+        "receiver_id": other_id,
+        "body": payload.body,
+        "encrypted": payload.encrypted,
+        "read": False,
+        "created_at": now()
+    }
+    msg = await db.insert_one("messages", msg_data)
+    
+    # Trigger push notification in background
+    import push
+    try:
+        sender_label = "Someone" if user.get("is_anonymous") else user["name"]
+        push_text = "🔒 You have a new encrypted message" if payload.encrypted else f"{sender_label} sent you a message."
+        background_tasks.add_task(push.send_push_to_user, other_id, "New Message", push_text)
+    except Exception as e:
+        import logging
+        logging.error(f"Push scheduling failed: {e}")
+    
+    return msg
+
+
+@api_router.get("/users/{user_id}/basic")
+async def get_user_basic(user_id: str, user: dict = Depends(current_user)):
+    target = await db.find_one("users", {"id": user_id})
+    if not target:
+        raise HTTPException(404, "User not found")
+    return {"name": target["name"], "avatar_url": target.get("avatar_url")}
 
 
 app.include_router(api_router)

@@ -13,10 +13,11 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Image } from "expo-image";
 
 import { apiGet, apiPost, ApiError } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { C } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast } from "@/src/ui";
 
 type Overview = {
@@ -42,24 +43,49 @@ type AdminUser = {
   role: string;
   disabled?: boolean;
   verified?: boolean;
+  avatar_url?: string;
+  created_at: string;
+};
+
+type AdminApplication = {
+  id: string;
+  user_name: string;
+  beat: string;
+  sample_url: string | null;
+  statement: string;
   created_at: string;
 };
 
 export default function AdminDashboard() {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const { user, logout } = useAuth();
-  const [tab, setTab] = useState<"queue" | "users">("queue");
+  const [tab, setTab] = useState<"queue" | "appeals" | "users" | "applications" | "audit">("queue");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [applications, setApplications] = useState<AdminApplication[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [appeals, setAppeals] = useState<any[]>([]);
   const [selected, setSelected] = useState<Overview["queue"][number] | null>(null);
+  const [selectedApp, setSelectedApp] = useState<AdminApplication | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [o, u] = await Promise.all([apiGet<Overview>("/admin/overview"), apiGet<AdminUser[]>("/admin/users")]);
+      const [o, u, a, auditRes, appealsRes] = await Promise.all([
+        apiGet<Overview>("/admin/overview"),
+        apiGet<AdminUser[]>("/admin/users"),
+        apiGet<AdminApplication[]>("/admin/applications"),
+        apiGet<{ items: any[]; next_cursor: string | null }>("/admin/audit"),
+        apiGet<any[]>("/admin/appeals")
+      ]);
       setOverview(o);
       setUsers(u);
+      setApplications(a);
+      setAuditLogs(auditRes.items);
+      setAppeals(appealsRes);
     } catch (e) {
       const message = e instanceof ApiError ? e.message : "Could not load admin data.";
       setToast({ message, tone: "error" });
@@ -114,11 +140,33 @@ export default function AdminDashboard() {
     }
   };
 
+  const reviewApplication = async (action: "approve" | "reject") => {
+    if (!selectedApp) return;
+    try {
+      await apiPost(`/admin/applications/${selectedApp.id}/review`, { action });
+      setSelectedApp(null);
+      setToast({ message: `Application ${action}d.`, tone: "success" });
+      await load();
+    } catch {
+      setToast({ message: "Could not review application.", tone: "error" });
+    }
+  };
+
+  const reviewAppeal = async (id: string, action: "approve" | "reject") => {
+    try {
+      await apiPost(`/admin/appeals/${id}/review`, { action });
+      setToast({ message: `Appeal ${action}d.`, tone: "success" });
+      await load();
+    } catch {
+      setToast({ message: "Could not review appeal.", tone: "error" });
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-          <ActivityIndicator color={C.red} />
+          <ActivityIndicator color={colors.red} />
         </View>
       </SafeAreaView>
     );
@@ -135,13 +183,13 @@ export default function AdminDashboard() {
           <Text style={styles.kicker}>TRUST & SAFETY</Text>
         </View>
         <Pressable testID="admin-logout-button" onPress={logout} style={styles.avatar}>
-          <Icon name="log-out-outline" color={C.surface} size={19} />
+          <Icon name="log-out-outline" color={colors.surface} size={19} />
         </Pressable>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.red} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.red} />}
       >
         <Text style={styles.hello}>Hey {user?.name}.</Text>
         <Text style={styles.headline}>Accountability desk.</Text>
@@ -150,11 +198,11 @@ export default function AdminDashboard() {
           <Metric label="USERS" value={overview?.users ?? "—"} />
           <Metric label="REPORTERS" value={overview?.reporters ?? "—"} />
           <Metric label="POSTS" value={overview?.posts ?? "—"} />
-          <Metric label="OPEN FLAGS" value={overview?.open_reports ?? "—"} tone={overview && overview.open_reports > 0 ? C.red : undefined} />
+          <Metric label="OPEN FLAGS" value={overview?.open_reports ?? "—"} tone={overview && overview.open_reports > 0 ? colors.red : undefined} />
         </View>
 
         <View style={styles.segment}>
-          {(["queue", "users"] as const).map((t) => (
+          {(["queue", "appeals", "users", "applications", "audit"] as const).map((t) => (
             <Pressable
               key={t}
               testID={`admin-tab-${t}`}
@@ -162,13 +210,37 @@ export default function AdminDashboard() {
               style={[styles.segmentItem, tab === t && styles.segmentActive]}
             >
               <Text style={[styles.segmentText, tab === t && styles.segmentTextActive]}>
-                {t === "queue" ? `Moderation · ${overview?.queue?.length ?? 0}` : `Users · ${users.length}`}
+                {t === "queue"
+                  ? `Queue (${overview?.open_reports ?? 0})`
+                  : t === "appeals"
+                  ? `Appeals (${appeals.length})`
+                  : t === "users"
+                  ? `Users (${overview?.users ?? users.length})`
+                  : t === "applications"
+                  ? `Apps (${applications.length})`
+                  : `Audit`}
               </Text>
             </Pressable>
           ))}
         </View>
 
-        {tab === "queue" ? (
+        {tab === "audit" ? (
+          <View style={{ gap: 12 }}>
+            {auditLogs.length ? auditLogs.map((log) => (
+              <View key={log.id} style={styles.userRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.userName}>{log.action} {log.target_type}</Text>
+                  <Text style={styles.meta}>
+                    by {log.admin_name} on {new Date(log.created_at).toLocaleString()}
+                  </Text>
+                  {log.details ? <Text style={[styles.queueNote, { marginTop: 4 }]}>{log.details}</Text> : null}
+                </View>
+              </View>
+            )) : (
+              <EmptyState title="No audit logs." body="Admin actions will appear here." icon="list-outline" />
+            )}
+          </View>
+        ) : tab === "queue" ? (
           overview?.queue?.length ? (
             overview.queue.map((item) => (
               <Pressable
@@ -178,7 +250,7 @@ export default function AdminDashboard() {
                 style={styles.queueItem}
               >
                 <View style={styles.severity}>
-                  <Icon name="flag-outline" color={C.red} size={18} />
+                  <Icon name="flag-outline" color={colors.red} size={18} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.queueReason}>{item.reason}</Text>
@@ -197,17 +269,47 @@ export default function AdminDashboard() {
               icon="checkmark-done-outline"
             />
           )
-        ) : (
-          <>
+        ) : tab === "appeals" ? (
+          <View style={{ gap: 12 }}>
+            {appeals.length ? appeals.map((appeal) => (
+              <View key={appeal.id} style={styles.card}>
+                <Text style={styles.userName}>Appeal from {appeal.reporter_name}</Text>
+                <Text style={styles.meta}>Submitted {new Date(appeal.appealed_at).toLocaleString()}</Text>
+                
+                <View style={{ marginTop: 12, padding: 12, backgroundColor: colors.surface, borderRadius: 8 }}>
+                  <Text style={styles.meta}>Original Report Reason:</Text>
+                  <Text style={styles.queueNote}>{appeal.reason}</Text>
+                </View>
+                
+                <View style={{ marginTop: 12, padding: 12, backgroundColor: colors.surface, borderRadius: 8 }}>
+                  <Text style={styles.meta}>Appeal Statement:</Text>
+                  <Text style={styles.queueNote}>{appeal.appeal_text}</Text>
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
+                  <Button style={{ flex: 1 }} onPress={() => reviewAppeal(appeal.id, "approve")}>Approve</Button>
+                  <Button style={{ flex: 1 }} tone="outline" onPress={() => reviewAppeal(appeal.id, "reject")}>Reject</Button>
+                </View>
+              </View>
+            )) : (
+              <EmptyState title="No active appeals." body="Appeals from suspended users will appear here." icon="mail-outline" />
+            )}
+          </View>
+        ) : tab === "users" ? (
+          <View style={{ gap: 12 }}>
             {users.map((u) => (
               <View key={u.id} testID={`admin-user-${u.role}`} style={styles.userRow}>
-                <View style={styles.userMark}>
-                  <Text style={styles.userInitial}>{u.name[0]}</Text>
-                </View>
+                {u.avatar_url ? (
+                  <Image source={{ uri: u.avatar_url }} style={{ width: 32, height: 32, borderRadius: 8 }} />
+                ) : (
+                  <View style={styles.userMark}>
+                    <Text style={styles.userInitial}>{u.name[0]}</Text>
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <Text style={styles.userName}>{u.name}</Text>
-                    {u.verified ? <Icon name="checkmark-circle" color={C.blue} size={13} /> : null}
+                    {u.verified ? <Icon name="checkmark-circle" color={colors.blue} size={13} /> : null}
                     {u.disabled ? (
                       <View style={styles.badge}>
                         <Text style={styles.badgeText}>DISABLED</Text>
@@ -221,18 +323,43 @@ export default function AdminDashboard() {
                 <View style={styles.userActions}>
                   {u.role === "reporter" && !u.verified ? (
                     <Pressable testID={`admin-verify-${u.id}`} onPress={() => verifyUser(u)} style={styles.iconBtn}>
-                      <Icon name="checkmark-circle-outline" color={C.blue} size={20} />
+                      <Icon name="checkmark-circle-outline" color={colors.blue} size={20} />
                     </Pressable>
                   ) : null}
                   {u.id !== user?.id ? (
                     <Pressable testID={`admin-toggle-${u.id}`} onPress={() => toggleUser(u)} style={styles.iconBtn}>
-                      <Icon name={u.disabled ? "power-outline" : "ban-outline"} color={u.disabled ? C.green : C.red} size={20} />
+                      <Icon name={u.disabled ? "power-outline" : "ban-outline"} color={u.disabled ? colors.green : colors.red} size={20} />
                     </Pressable>
                   ) : null}
                 </View>
               </View>
             ))}
-          </>
+          </View>
+        ) : (
+          <View style={{ gap: 12 }}>
+            {applications.length === 0 ? (
+              <EmptyState icon="folder-open-outline" title="No pending applications" body="Check back later." />
+            ) : (
+              applications.map((a) => (
+                <View key={a.id} style={styles.userRow}>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={styles.userName}>{a.user_name}</Text>
+                    <Text style={styles.meta}>Beat: {a.beat}</Text>
+                    <Text style={styles.meta}>Applied: {new Date(a.created_at).toLocaleDateString()}</Text>
+                    <Text style={[styles.meta, { color: colors.ink }]}>"{a.statement}"</Text>
+                    {a.sample_url ? (
+                      <Text style={[styles.meta, { color: colors.blue }]}>{a.sample_url}</Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.userActions}>
+                    <Pressable onPress={() => setSelectedApp(a)} style={styles.iconBtn}>
+                      <Text style={[styles.actionText, { color: colors.blue }]}>Review</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
         )}
 
         <View style={styles.principles}>
@@ -262,6 +389,23 @@ export default function AdminDashboard() {
         </View>
       </Modal>
 
+      {selectedApp && (
+        <Modal transparent animationType="fade" onRequestClose={() => setSelectedApp(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modal}>
+              <Text style={styles.overline}>REVIEW APPLICATION</Text>
+              <Text style={styles.modalHeading}>Approve {selectedApp.user_name}?</Text>
+              <Text style={styles.modalReason}>Beat: {selectedApp.beat}</Text>
+              <Text style={styles.modalNote}>"{selectedApp.statement}"</Text>
+              
+              <Button onPress={() => reviewApplication("approve")} style={{ marginTop: 24 }}>Approve as Reporter</Button>
+              <Button onPress={() => reviewApplication("reject")} tone="outline" style={{ marginTop: 12 }}>Decline</Button>
+              <Button onPress={() => setSelectedApp(null)} tone="outline" style={{ marginTop: 12 }}>Cancel</Button>
+            </View>
+          </View>
+        </Modal>
+      )}
+
       {toast ? <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} /> : null}
     </SafeAreaView>
   );
@@ -276,76 +420,76 @@ function Metric({ label, value, tone }: { label: string; value: number | string;
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.paper },
+const createStyles = (colors: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: C.line,
+    borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  wordmark: { color: C.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
-  signalDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red, marginLeft: 4, marginTop: 6 },
-  kicker: { fontSize: 9, letterSpacing: 2, color: C.muted, marginTop: 4, fontWeight: "800" },
-  avatar: { backgroundColor: C.ink, borderRadius: 20, width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  wordmark: { color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
+  signalDot: { width: 6, height: 6, borderRadius: 8, backgroundColor: colors.red, marginLeft: 4, marginTop: 6 },
+  kicker: { fontSize: 9, letterSpacing: 2, color: colors.muted, marginTop: 4, fontWeight: "800" },
+  avatar: { backgroundColor: colors.ink, borderRadius: 20, width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   content: { padding: 20, paddingBottom: 60 },
-  hello: { color: C.muted, fontSize: 13, fontWeight: "700" },
-  headline: { color: C.ink, fontSize: 30, fontWeight: "800", letterSpacing: -1, marginTop: 4, marginBottom: 20 },
+  hello: { color: colors.muted, fontSize: 13, fontWeight: "700" },
+  headline: { color: colors.ink, fontSize: 30, fontWeight: "800", letterSpacing: -1, marginTop: 4, marginBottom: 20 },
   metrics: {
     flexDirection: "row",
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     marginBottom: 20,
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
   },
-  metric: { flex: 1, paddingVertical: 14, paddingHorizontal: 10, borderRightWidth: 1, borderColor: C.line },
-  metricNumber: { fontSize: 22, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
-  metricLabel: { color: C.muted, fontSize: 9, letterSpacing: 1, marginTop: 4, fontWeight: "800" },
-  segment: { flexDirection: "row", backgroundColor: C.line, padding: 3, borderRadius: 8, marginBottom: 18 },
-  segmentItem: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 6 },
-  segmentActive: { backgroundColor: C.surface },
-  segmentText: { color: C.muted, fontWeight: "800", fontSize: 12 },
-  segmentTextActive: { color: C.ink },
+  metric: { flex: 1, paddingVertical: 14, paddingHorizontal: 10, borderRightWidth: 1, borderColor: colors.line },
+  metricNumber: { fontSize: 22, fontWeight: "800", color: colors.ink, letterSpacing: -0.5 },
+  metricLabel: { color: colors.muted, fontSize: 9, letterSpacing: 1, marginTop: 4, fontWeight: "800" },
+  segment: { flexDirection: "row", backgroundColor: colors.line, padding: 3, borderRadius: 8, marginBottom: 18 },
+  segmentItem: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 8 },
+  segmentActive: { backgroundColor: colors.surface },
+  segmentText: { color: colors.muted, fontWeight: "800", fontSize: 12 },
+  segmentTextActive: { color: colors.ink },
   queueItem: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     borderTopWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     paddingVertical: 16,
   },
-  severity: { width: 34, height: 34, backgroundColor: "#F5E5E2", alignItems: "center", justifyContent: "center", borderRadius: 4 },
-  queueReason: { color: C.ink, fontWeight: "800", fontSize: 14 },
-  queueNote: { color: C.muted, fontSize: 12, marginTop: 3, fontStyle: "italic" },
-  queueStatus: { color: C.red, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
-  meta: { color: C.muted, fontSize: 12 },
+  severity: { width: 34, height: 34, backgroundColor: "#F5E5E2", alignItems: "center", justifyContent: "center", borderRadius: 8 },
+  queueReason: { color: colors.ink, fontWeight: "800", fontSize: 14 },
+  queueNote: { color: colors.muted, fontSize: 12, marginTop: 3, fontStyle: "italic" },
+  queueStatus: { color: colors.red, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  meta: { color: colors.muted, fontSize: 12 },
   userRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     borderTopWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     paddingVertical: 14,
   },
-  userMark: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.dark, alignItems: "center", justifyContent: "center" },
-  userInitial: { color: C.surface, fontWeight: "800" },
-  userName: { color: C.ink, fontWeight: "800", fontSize: 14 },
+  userMark: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.dark, alignItems: "center", justifyContent: "center" },
+  userInitial: { color: colors.surface, fontWeight: "800" },
+  userName: { color: colors.ink, fontWeight: "800", fontSize: 14 },
   userActions: { flexDirection: "row", gap: 6 },
-  iconBtn: { padding: 8 },
-  badge: { backgroundColor: C.red, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
-  badgeText: { color: C.surface, fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
-  overline: { color: C.muted, fontSize: 11, letterSpacing: 1.5, fontWeight: "800" },
-  principles: { borderTopWidth: 1, borderColor: C.line, paddingTop: 22, marginTop: 28 },
-  principleText: { color: C.ink, fontSize: 16, lineHeight: 22, fontWeight: "700", marginTop: 10 },
-  principleMeta: { color: C.muted, fontSize: 12, marginTop: 8 },
+  iconBtn: { padding: 8, minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
+  badge: { backgroundColor: colors.red, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
+  badgeText: { color: colors.surface, fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  overline: { color: colors.muted, fontSize: 11, letterSpacing: 1.5, fontWeight: "800" },
+  principles: { borderTopWidth: 1, borderColor: colors.line, paddingTop: 22, marginTop: 28 },
+  principleText: { color: colors.ink, fontSize: 16, lineHeight: 22, fontWeight: "700", marginTop: 10 },
+  principleMeta: { color: colors.muted, fontSize: 12, marginTop: 8 },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(24,32,42,0.55)", justifyContent: "flex-end" },
-  modal: { backgroundColor: C.surface, padding: 22, paddingBottom: 32, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
-  modalHeading: { color: C.ink, fontSize: 22, fontWeight: "800", marginTop: 8, marginBottom: 8 },
-  modalReason: { color: C.ink, fontSize: 15, fontWeight: "700", marginBottom: 6 },
-  modalNote: { color: C.muted, fontSize: 13, marginBottom: 12, fontStyle: "italic" },
+  modal: { backgroundColor: colors.surface, padding: 22, paddingBottom: 32, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
+  modalHeading: { color: colors.ink, fontSize: 22, fontWeight: "800", marginTop: 8, marginBottom: 8 },
+  modalReason: { color: colors.ink, fontSize: 15, fontWeight: "700", marginBottom: 6 },
+  modalNote: { color: colors.muted, fontSize: 13, marginBottom: 12, fontStyle: "italic" },
 });

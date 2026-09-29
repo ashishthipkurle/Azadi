@@ -17,7 +17,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { apiDelete, apiGet } from "@/src/api";
 import { MediaPlayer, type MediaAttachment } from "@/src/media-player";
-import { C } from "@/src/theme";
+import {   } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { EmptyState, Icon, Toast } from "@/src/ui";
 import { storage } from "@/src/utils/storage";
 
@@ -35,6 +36,8 @@ type SavedPost = {
 const CACHE_KEY = "azadi.bookmarks.cache";
 
 export default function Saved() {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const router = useRouter();
   const [posts, setPosts] = useState<SavedPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,7 +81,7 @@ export default function Saved() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
         <Pressable testID="saved-back" onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <Icon name="chevron-back" color={C.ink} />
+          <Icon name="chevron-back" color={colors.ink} />
           <Text style={styles.backText}>Back</Text>
         </Pressable>
         <Text style={styles.title}>Saved</Text>
@@ -87,7 +90,7 @@ export default function Saved() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={C.red} />
+          <ActivityIndicator color={colors.red} />
         </View>
       ) : (
         <ScrollView
@@ -100,13 +103,13 @@ export default function Saved() {
                 await load();
                 setRefreshing(false);
               }}
-              tintColor={C.red}
+              tintColor={colors.red}
             />
           }
         >
           {offline ? (
             <View style={styles.offline}>
-              <Icon name="cloud-offline-outline" color={C.muted} size={16} />
+              <Icon name="cloud-offline-outline" color={colors.muted} size={16} />
               <Text style={styles.offlineText}>Showing your last cached reading list — pull to retry.</Text>
             </View>
           ) : null}
@@ -140,7 +143,7 @@ export default function Saved() {
                     <Text style={styles.byline}>By {p.reporter_name}</Text>
                   </Pressable>
                   <Pressable testID={`saved-remove-${p.id}`} onPress={() => remove(p.id)} style={styles.removeBtn}>
-                    <Icon name="bookmark" color={C.red} size={16} />
+                    <Icon name="bookmark" color={colors.red} size={16} />
                     <Text style={styles.removeText}>Remove</Text>
                   </Pressable>
                 </View>
@@ -155,21 +158,21 @@ export default function Saved() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.paper },
+const createStyles = (colors: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: C.line,
+    borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   backBtn: { flexDirection: "row", alignItems: "center", gap: 4, width: 60 },
-  backText: { color: C.ink, fontSize: 14, fontWeight: "700" },
-  title: { color: C.ink, fontSize: 18, fontWeight: "800" },
+  backText: { color: colors.ink, fontSize: 14, fontWeight: "700" },
+  title: { color: colors.ink, fontSize: 18, fontWeight: "800" },
   content: { padding: 20, paddingBottom: 60 },
   offline: {
     flexDirection: "row",
@@ -178,20 +181,20 @@ const styles = StyleSheet.create({
     backgroundColor: "#EFEBDF",
     padding: 10,
     marginBottom: 14,
-    borderRadius: 6,
+    borderRadius: 8,
   },
-  offlineText: { color: C.muted, fontSize: 12, flex: 1 },
+  offlineText: { color: colors.muted, fontSize: 12, flex: 1 },
   card: {
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     padding: 16,
     marginBottom: 12,
-    borderRadius: 6,
+    borderRadius: 8,
   },
-  kind: { color: C.muted, fontSize: 10, letterSpacing: 1.5, fontWeight: "800", marginBottom: 6 },
-  postTitle: { color: C.ink, fontSize: 18, fontWeight: "800", lineHeight: 24 },
-  postBody: { color: C.muted, fontSize: 14, lineHeight: 20, marginTop: 6 },
+  kind: { color: colors.muted, fontSize: 10, letterSpacing: 1.5, fontWeight: "800", marginBottom: 6 },
+  postTitle: { color: colors.ink, fontSize: 18, fontWeight: "800", lineHeight: 24 },
+  postBody: { color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 6 },
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -199,9 +202,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: C.line,
+    borderTopColor: colors.line,
   },
-  byline: { color: C.ink, fontSize: 13, fontWeight: "700" },
+  byline: { color: colors.ink, fontSize: 13, fontWeight: "700" },
   removeBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  removeText: { color: C.red, fontSize: 12, fontWeight: "800" },
+  removeText: { color: colors.red, fontSize: 12, fontWeight: "800" },
 });

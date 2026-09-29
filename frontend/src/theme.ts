@@ -14,6 +14,20 @@ export const C = {
   darkSurface: "#2A3037",
 };
 
+export const D = {
+  paper: "#20252B",
+  surface: "#2A3037",
+  ink: "#F7F3EA",
+  muted: "#A0A8B0",
+  line: "#3A4149",
+  red: "#E5382D",
+  amber: "#D4820A",
+  blue: "#4A9FE5",
+  green: "#4BAB76",
+  dark: "#F7F3EA",
+  darkSurface: "#F4F0E8",
+};
+
 export const S = {
   radius: 6,
   radiusLg: 10,

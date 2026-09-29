@@ -7,6 +7,7 @@ import { storage } from "@/src/utils/storage";
 
 const RAW =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
+  process.env.EXPO_PUBLIC_RELAY_URL ||
   (Constants.expoConfig?.extra as any)?.backendUrl ||
   "";
 
@@ -18,7 +19,9 @@ export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
+    this.name = "ApiError";
     this.status = status;
+    Object.setPrototypeOf(this, ApiError.prototype);
   }
 }
 
@@ -46,9 +49,31 @@ export async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export async function apiGetPaginated<T>(path: string, cursorKey: string, cursorValue?: string): Promise<T> {
+  const url = new URL(`${API}${path}`);
+  if (cursorValue) {
+    url.searchParams.append(cursorKey, cursorValue);
+  }
+  const res = await fetch(url.toString(), {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) throw new ApiError(res.status, await parseError(res));
+  return res.json();
+}
+
 export async function apiPost<T>(path: string, body?: any): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new ApiError(res.status, await parseError(res));
+  return res.json();
+}
+
+export async function apiPatch<T>(path: string, body?: any): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: body != null ? JSON.stringify(body) : undefined,
   });

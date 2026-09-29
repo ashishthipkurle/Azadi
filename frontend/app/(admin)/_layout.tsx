@@ -7,7 +7,7 @@ export default function AdminLayout() {
   if (!ready) return null;
   if (!user) return <Redirect href="/" />;
   if (user.role !== "admin") {
-    const dest = user.role === "reporter" ? "/(reporter)/studio" : "/(reader)/feed";
+    const dest = user.role === "reporter" ? "/(reporter)/studio" : "/(reader)/(tabs)";
     return <Redirect href={dest} />;
   }
   return <Stack screenOptions={{ headerShown: false }} />;

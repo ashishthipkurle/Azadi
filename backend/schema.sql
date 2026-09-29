@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
     followers   INTEGER NOT NULL DEFAULT 0,
     disabled    BOOLEAN NOT NULL DEFAULT FALSE,
     disabled_at TIMESTAMPTZ,
+    avatar_url  TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -38,10 +39,15 @@ CREATE TABLE IF NOT EXISTS posts (
     body          TEXT NOT NULL,
     kind          TEXT NOT NULL DEFAULT 'dispatch',
     location      TEXT DEFAULT 'On the ground',
+    latitude      NUMERIC,
+    longitude     NUMERIC,
     stats         TEXT DEFAULT 'New dispatch',
     verified      BOOLEAN NOT NULL DEFAULT FALSE,
     media         JSONB DEFAULT '[]'::jsonb,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    blocks        JSONB DEFAULT '[]'::jsonb,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scheduled_at  TIMESTAMPTZ,
+    topic         TEXT
 );
 
 CREATE INDEX idx_posts_reporter_id ON posts(reporter_id);
@@ -176,7 +182,12 @@ CREATE TABLE IF NOT EXISTS moderation (
     status        TEXT NOT NULL DEFAULT 'open',
     resolved_by   UUID,
     resolved_at   TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    appeal_text   TEXT,
+    appeal_status TEXT,
+    appealed_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scheduled_at  TIMESTAMPTZ,
+    topic         TEXT
 );
 
 CREATE INDEX idx_moderation_status ON moderation(status);
@@ -235,6 +246,44 @@ RETURNS TABLE(supporter_id UUID, total BIGINT, count BIGINT) AS $$
     LIMIT max_results;
 $$ LANGUAGE SQL STABLE;
 
+
+-- ──────────────────────────────────────────────
+-- 13. reporter_applications
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS reporter_applications (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    email         TEXT NOT NULL,
+    beat          TEXT NOT NULL,
+    portfolio_url TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by   UUID,
+    reviewed_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scheduled_at  TIMESTAMPTZ,
+    topic         TEXT
+);
+
+CREATE INDEX idx_reporter_applications_status ON reporter_applications(status);
+
+-- ──────────────────────────────────────────────
+-- 14. audit_log
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    admin_id    UUID NOT NULL,
+    admin_name  TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id   TEXT NOT NULL,
+    details     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_audit_log_created_at ON audit_log(created_at DESC);
+
+
 -- ============================================================
 -- Disable RLS on all tables (backend uses service_role key)
 -- ============================================================
@@ -249,6 +298,8 @@ ALTER TABLE media DISABLE ROW LEVEL SECURITY;
 ALTER TABLE live_sessions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE moderation DISABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE comments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE push_tokens DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- Grant full access to anon and authenticated roles
@@ -265,6 +316,8 @@ GRANT ALL ON TABLE media TO anon, authenticated;
 GRANT ALL ON TABLE live_sessions TO anon, authenticated;
 GRANT ALL ON TABLE moderation TO anon, authenticated;
 GRANT ALL ON TABLE webhook_events TO anon, authenticated;
+GRANT ALL ON TABLE comments TO anon, authenticated;
+GRANT ALL ON TABLE push_tokens TO anon, authenticated;
 
 -- Grant sequence usage for auto-increment columns
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
@@ -275,3 +328,102 @@ GRANT EXECUTE ON FUNCTION support_counts_since(TIMESTAMPTZ) TO anon, authenticat
 GRANT EXECUTE ON FUNCTION support_totals(UUID[]) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION follower_counts(UUID[]) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION top_supporters(UUID, INTEGER) TO anon, authenticated;
+
+-- ============================================================
+-- Phase 1 Migrations: Comments & Push Tokens
+-- ============================================================
+CREATE TABLE IF NOT EXISTS comments (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    post_id     UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_name   TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    parent_id   UUID REFERENCES comments(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_comments_post_id ON comments(post_id);
+CREATE INDEX idx_comments_parent_id ON comments(parent_id);
+
+CREATE TABLE IF NOT EXISTS push_tokens (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token       TEXT NOT NULL UNIQUE,
+    platform    TEXT DEFAULT 'expo',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_push_tokens_user_id ON push_tokens(user_id);
+
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS comment_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, ''))
+    ) STORED;
+CREATE INDEX IF NOT EXISTS idx_posts_search ON posts USING gin(search_vector);
+
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS push_sent BOOLEAN DEFAULT FALSE;
+
+-- ============================================================
+-- Phase 2 Migrations: Edit Post & Profile
+-- ============================================================
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT '';
+
+CREATE OR REPLACE FUNCTION increment_comment_count(p_id UUID)
+RETURNS void AS $$
+BEGIN
+    UPDATE posts SET comment_count = comment_count + 1 WHERE id = p_id;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION decrement_comment_count(p_id UUID)
+RETURNS void AS $$
+BEGIN
+    UPDATE posts SET comment_count = GREATEST(0, comment_count - 1) WHERE id = p_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+ALTER TABLE reporter_applications DISABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log DISABLE ROW LEVEL SECURITY;
+
+
+-- Phase 2: Direct Messaging
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    receiver_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    read BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id);
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+
+-- ──────────────────────────────────────────────
+-- Phase 3: Friend Requests
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS friend_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    receiver_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(sender_id, receiver_id)
+);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_sender ON friend_requests(sender_id);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver ON friend_requests(receiver_id);
+
+ALTER TABLE friend_requests ENABLE ROW LEVEL SECURITY;
+
+-- ──────────────────────────────────────────────
+-- Phase 4: E2EE and Anonymity
+-- ──────────────────────────────────────────────
+ALTER TABLE users ADD COLUMN IF NOT EXISTS public_key TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS public_key_updated_at TIMESTAMPTZ;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS encrypted BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS codename TEXT;

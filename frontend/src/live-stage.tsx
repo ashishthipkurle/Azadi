@@ -13,12 +13,15 @@ import type { LocalVideoTrack, RemoteVideoTrack } from "livekit-client";
 import { useEffect, useRef } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 
-import { C } from "@/src/theme";
+import {   } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 
 type AnyVideoTrack = LocalVideoTrack | RemoteVideoTrack | undefined | null;
 
 export function LiveStage({ track, label }: { track: AnyVideoTrack; label: string }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -57,7 +60,7 @@ export function LiveStage({ track, label }: { track: AnyVideoTrack; label: strin
 
   return (
     <View style={[styles.frame, styles.nativeFallback]}>
-      <Icon name="videocam-outline" color={C.surface} size={30} />
+      <Icon name="videocam-outline" color={colors.surface} size={30} />
       <Text style={styles.fallbackTitle}>Broadcast is running</Text>
       <Text style={styles.fallbackBody}>
         Video rendering on device needs a dev build. Open the web preview or generate a build to watch.
@@ -70,10 +73,10 @@ export function LiveStage({ track, label }: { track: AnyVideoTrack; label: strin
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   frame: {
     height: 260,
-    backgroundColor: C.dark,
+    backgroundColor: colors.dark,
     borderRadius: 8,
     overflow: "hidden",
     position: "relative",
@@ -84,7 +87,7 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 8,
   },
-  fallbackTitle: { color: C.surface, fontWeight: "800", fontSize: 16 },
+  fallbackTitle: { color: colors.surface, fontWeight: "800", fontSize: 16 },
   fallbackBody: { color: "#B7BEC5", fontSize: 12, textAlign: "center", lineHeight: 18 },
   livePill: {
     position: "absolute",
@@ -96,8 +99,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.55)",
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 12,
+    borderRadius: 8,
   },
-  liveDot: { backgroundColor: C.red, width: 7, height: 7, borderRadius: 4 },
-  livePillText: { color: C.surface, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  liveDot: { backgroundColor: colors.red, width: 7, height: 7, borderRadius: 8 },
+  livePillText: { color: colors.surface, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
 });

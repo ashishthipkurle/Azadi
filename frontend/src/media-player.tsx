@@ -9,7 +9,8 @@ import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { StyleSheet, Text, View } from "react-native";
 
-import { C } from "@/src/theme";
+import {   } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 
 export type MediaAttachment = {
@@ -21,36 +22,38 @@ export type MediaAttachment = {
 const muxImage = (id: string) => `https://image.mux.com/${id}/thumbnail.jpg?width=800&fit_mode=preserve`;
 const muxStream = (id: string) => `https://stream.mux.com/${id}.m3u8`;
 
-export function MediaPlayer({ media, radius = 8 }: { media: MediaAttachment; radius?: number }) {
+export function MediaPlayer({ media, radius = 8, fill = false }: { media: MediaAttachment; radius?: number; fill?: boolean }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   if (!media.playback_id) {
     return (
-      <View style={[styles.placeholder, { borderRadius: radius }]}>
-        <Icon name={media.kind === "video" ? "film-outline" : "image-outline"} color={C.surface} size={24} />
+      <View style={[fill ? styles.placeholderFill : styles.placeholder, { borderRadius: radius }]}>
+        <Icon name={media.kind === "video" ? "film-outline" : "image-outline"} color={colors.surface} size={24} />
         <Text style={styles.placeholderText}>Processing…</Text>
       </View>
     );
   }
   if (media.kind === "video") {
-    return <VideoTile playbackId={media.playback_id} radius={radius} />;
+    return <VideoTile playbackId={media.playback_id} radius={radius} fill={fill} />;
   }
   return (
     <Image
       source={{ uri: muxImage(media.playback_id) }}
-      style={[styles.image, { borderRadius: radius }]}
+      style={[fill ? styles.imageFill : styles.image, { borderRadius: radius }]}
       contentFit="cover"
       transition={200}
     />
   );
 }
 
-function VideoTile({ playbackId, radius }: { playbackId: string; radius: number }) {
+function VideoTile({ playbackId, radius, fill }: { playbackId: string; radius: number; fill?: boolean }) {
   const player = useVideoPlayer(muxStream(playbackId), (p) => {
     p.loop = false;
     p.muted = true;
     p.playbackRate = 1;
   });
   return (
-    <View style={[styles.videoFrame, { borderRadius: radius }]}>
+    <View style={[fill ? styles.videoFrameFill : styles.videoFrame, { borderRadius: radius }]}>
       <VideoView
         style={StyleSheet.absoluteFillObject}
         player={player}
@@ -63,16 +66,26 @@ function VideoTile({ playbackId, radius }: { playbackId: string; radius: number 
   );
 }
 
-const styles = StyleSheet.create({
-  image: { width: "100%", height: 220, backgroundColor: C.dark },
-  videoFrame: { width: "100%", height: 220, backgroundColor: C.dark, overflow: "hidden" },
+const createStyles = (colors: any) => StyleSheet.create({
+  image: { width: "100%", height: 220, backgroundColor: colors.dark },
+  imageFill: { flex: 1, width: "100%", backgroundColor: colors.dark },
+  videoFrame: { width: "100%", height: 220, backgroundColor: colors.dark, overflow: "hidden" },
+  videoFrameFill: { flex: 1, width: "100%", backgroundColor: colors.dark, overflow: "hidden" },
   placeholder: {
     width: "100%",
     height: 180,
-    backgroundColor: C.dark,
+    backgroundColor: colors.dark,
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
   },
-  placeholderText: { color: C.surface, fontSize: 12, fontWeight: "700" },
+  placeholderFill: {
+    flex: 1,
+    width: "100%",
+    backgroundColor: colors.dark,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  placeholderText: { color: colors.surface, fontSize: 12, fontWeight: "700" },
 });

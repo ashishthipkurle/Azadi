@@ -16,7 +16,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { apiGet, apiPost, ApiError } from "@/src/api";
-import { C } from "@/src/theme";
+import {   } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast } from "@/src/ui";
 
 type Pledge = {
@@ -29,6 +30,8 @@ type Pledge = {
 };
 
 export default function Pledges() {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const router = useRouter();
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +75,7 @@ export default function Pledges() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
         <Pressable testID="pledges-back" onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <Icon name="chevron-back" color={C.ink} />
+          <Icon name="chevron-back" color={colors.ink} />
           <Text style={styles.backText}>Back</Text>
         </Pressable>
         <Text style={styles.title}>My pledges</Text>
@@ -81,7 +84,7 @@ export default function Pledges() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={C.red} />
+          <ActivityIndicator color={colors.red} />
         </View>
       ) : (
         <ScrollView
@@ -94,7 +97,7 @@ export default function Pledges() {
                 await load();
                 setRefreshing(false);
               }}
-              tintColor={C.red}
+              tintColor={colors.red}
             />
           }
         >
@@ -118,7 +121,7 @@ export default function Pledges() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.reporterName}>
                       {p.reporter.name}{" "}
-                      {p.reporter.verified ? <Icon name="checkmark-circle" color={C.blue} size={13} /> : null}
+                      {p.reporter.verified ? <Icon name="checkmark-circle" color={colors.blue} size={13} /> : null}
                     </Text>
                     <Text style={styles.meta}>
                       Since {new Date(p.created_at).toLocaleDateString()}
@@ -139,7 +142,7 @@ export default function Pledges() {
                   onPress={() => setCancelling(p)}
                   style={styles.cancelBtn}
                 >
-                  <Icon name="close-circle-outline" color={C.red} size={17} />
+                  <Icon name="close-circle-outline" color={colors.red} size={17} />
                   <Text style={styles.cancelBtnText}>Cancel pledge</Text>
                 </Pressable>
               </View>
@@ -181,59 +184,59 @@ function statusLabel(status: Pledge["status"]) {
 
 function statusColor(status: Pledge["status"]) {
   return status === "verified" || status === "active"
-    ? C.green
+    ? colors.green
     : status === "pending"
-      ? C.amber
-      : C.muted;
+      ? colors.amber
+      : colors.muted;
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.paper },
+const createStyles = (colors: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: C.line,
+    borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   backBtn: { flexDirection: "row", alignItems: "center", gap: 4, width: 60 },
-  backText: { color: C.ink, fontSize: 14, fontWeight: "700" },
-  title: { color: C.ink, fontSize: 18, fontWeight: "800" },
+  backText: { color: colors.ink, fontSize: 14, fontWeight: "700" },
+  title: { color: colors.ink, fontSize: 18, fontWeight: "800" },
   content: { padding: 20, paddingBottom: 60 },
-  subtitle: { color: C.muted, fontSize: 13, lineHeight: 20, marginBottom: 18 },
+  subtitle: { color: colors.muted, fontSize: 13, lineHeight: 20, marginBottom: 18 },
   card: {
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     padding: 16,
     marginBottom: 12,
-    borderRadius: 6,
+    borderRadius: 8,
   },
   mark: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: C.dark,
+    backgroundColor: colors.dark,
     alignItems: "center",
     justifyContent: "center",
   },
-  markInitial: { color: C.surface, fontWeight: "800", fontSize: 16 },
-  reporterName: { color: C.ink, fontSize: 15, fontWeight: "800" },
-  meta: { color: C.muted, fontSize: 12, marginTop: 3 },
+  markInitial: { color: colors.surface, fontWeight: "800", fontSize: 16 },
+  reporterName: { color: colors.ink, fontSize: 15, fontWeight: "800" },
+  meta: { color: colors.muted, fontSize: 12, marginTop: 3 },
   amountPill: {
-    backgroundColor: C.paper,
+    backgroundColor: colors.paper,
     borderWidth: 1,
-    borderColor: C.line,
+    borderColor: colors.line,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 12,
+    borderRadius: 8,
   },
-  amountText: { color: C.ink, fontWeight: "800", fontSize: 12 },
+  amountText: { color: colors.ink, fontWeight: "800", fontSize: 12 },
   statusRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusDot: { width: 8, height: 8, borderRadius: 8 },
   statusText: { fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
   cancelBtn: {
     flexDirection: "row",
@@ -241,13 +244,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: C.red,
+    borderColor: colors.red,
     paddingVertical: 12,
-    borderRadius: 6,
+    borderRadius: 8,
   },
-  cancelBtnText: { color: C.red, fontWeight: "800", fontSize: 13 },
+  cancelBtnText: { color: colors.red, fontWeight: "800", fontSize: 13 },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(24,32,42,0.55)", justifyContent: "flex-end" },
-  modal: { backgroundColor: C.surface, padding: 22, paddingBottom: 32, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
-  overline: { color: C.muted, fontSize: 11, letterSpacing: 1.5, fontWeight: "800" },
-  modalTitle: { color: C.ink, fontSize: 20, fontWeight: "800", marginTop: 8, marginBottom: 12, lineHeight: 26 },
+  modal: { backgroundColor: colors.surface, padding: 22, paddingBottom: 32, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
+  overline: { color: colors.muted, fontSize: 11, letterSpacing: 1.5, fontWeight: "800" },
+  modalTitle: { color: colors.ink, fontSize: 20, fontWeight: "800", marginTop: 8, marginBottom: 12, lineHeight: 26 },
 });

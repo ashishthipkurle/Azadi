@@ -11,15 +11,19 @@ import {
   Text,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, ActionSheetIOS, Platform, Dimensions } from "react-native";
+const { width: windowWidth } = Dimensions.get("window");
 
 import { apiDelete, apiGet, apiPost, ApiError } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { MediaPlayer, type MediaAttachment } from "@/src/media-player";
 import { RazorpayCheckout, type CheckoutOrder } from "@/src/razorpay";
 import { SupportChoiceSheet, type SupportInterval } from "@/src/support-choice";
-import { C } from "@/src/theme";
-import { Button, EmptyState, Icon, Toast } from "@/src/ui";
+import { sharePost } from "@/src/share";
+import { useTheme } from "@/src/hooks/use-theme";
+import { EmptyState, Icon, Toast, ConfirmModal } from "@/src/ui";
 
 type ProfileResp = {
   reporter: {
@@ -31,8 +35,12 @@ type ProfileResp = {
     beat?: string;
     location?: string;
     followers: number;
+    following: number;
     support_total: number;
     is_following: boolean;
+    avatar_url?: string;
+    is_live?: boolean;
+    live_room?: string;
   };
   posts: {
     id: string;
@@ -43,10 +51,13 @@ type ProfileResp = {
     stats: string;
     created_at: string;
     media?: MediaAttachment[];
+    comment_count?: number;
   }[];
 };
 
 export default function ReporterProfile() {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
@@ -56,6 +67,8 @@ export default function ReporterProfile() {
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
   const [checkout, setCheckout] = useState<CheckoutOrder | null>(null);
   const [choosingInterval, setChoosingInterval] = useState(false);
+  const [activeTab, setActiveTab] = useState<"grid" | "video">("grid");
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -73,30 +86,37 @@ export default function ReporterProfile() {
     load();
   }, [load]);
 
+  const performUnfollow = async () => {
+    if (!data) return;
+    setShowDropdown(false);
+    try {
+      const res = await apiDelete<{ followers: number }>(`/reporters/${id}/follow`);
+      setData({ ...data, reporter: { ...data.reporter, is_following: false, followers: res.followers } });
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : "Unfollow action failed.";
+      setToast({ message, tone: "error" });
+    }
+  };
+
   const toggleFollow = async () => {
     if (!data) return;
     try {
-      if (data.reporter.is_following) {
-        const res = await apiDelete<{ followers: number }>(`/reporters/${id}/follow`);
-        setData({ ...data, reporter: { ...data.reporter, is_following: false, followers: res.followers } });
-      } else {
-        const res = await apiPost<{ followers: number }>(`/reporters/${id}/follow`);
-        setData({ ...data, reporter: { ...data.reporter, is_following: true, followers: res.followers } });
-        setToast({ message: `Following ${data.reporter.name}.`, tone: "success" });
-      }
+      const res = await apiPost<{ followers: number }>(`/reporters/${id}/follow`);
+      setData({ ...data, reporter: { ...data.reporter, is_following: true, followers: res.followers } });
+      setToast({ message: `Following ${data.reporter.name}.`, tone: "success" });
     } catch (e) {
       const message = e instanceof ApiError ? e.message : "Follow action failed.";
       setToast({ message, tone: "error" });
     }
   };
 
-  const startSupport = async (interval: SupportInterval) => {
+  const startCheckout = async (amount: number, interval: SupportInterval) => {
     if (!data) return;
     setChoosingInterval(false);
     try {
       const order = await apiPost<CheckoutOrder>("/support", {
         reporter_id: data.reporter.id,
-        amount: 7,
+        amount,
         interval,
       });
       setCheckout(order);
@@ -110,7 +130,7 @@ export default function ReporterProfile() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-          <ActivityIndicator color={C.red} />
+          <ActivityIndicator color={colors.red} />
         </View>
       </SafeAreaView>
     );
@@ -121,15 +141,26 @@ export default function ReporterProfile() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        <Pressable testID="profile-back" onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <Icon name="chevron-back" color={C.ink} />
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+      <View style={styles.topHeader}>
+        {/* Left Side: Back & Username */}
+        <View style={{ flex: 1, alignItems: "flex-start", flexDirection: "row", gap: 12 }}>
+          <Pressable testID="profile-back" onPress={() => router.back()} hitSlop={12}>
+            <Icon name="arrow-back" color={colors.ink} size={24} />
+          </Pressable>
+          <Text style={styles.username}>{r.name?.toLowerCase().replace(/\s+/g, "_")}</Text>
+          {r.verified ? <Icon name="checkmark-circle" color={colors.blue} size={16} /> : null}
+        </View>
+
+        {/* Right Side: Burger Menu for Public Actions */}
+        <View style={{ flexDirection: "row", gap: 20, alignItems: "center" }}>
+          <Pressable onPress={() => setToast({ message: "Options coming soon", tone: "info" })}>
+            <Icon name="ellipsis-horizontal" color={colors.ink} size={24} />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -138,88 +169,146 @@ export default function ReporterProfile() {
               await load();
               setRefreshing(false);
             }}
-            tintColor={C.red}
+            tintColor={colors.red}
           />
         }
       >
-        <View style={styles.top}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarInitial}>{r.name[0]}</Text>
+        {/* Profile Head */}
+        <View style={styles.profileHead}>
+          <View style={styles.avatarContainer}>
+            {r.avatar_url ? (
+              <Image source={{ uri: r.avatar_url }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" }]}>
+                <Text style={styles.avatarText}>{r.name?.charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
           </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <Text style={styles.name}>{r.name}</Text>
-              {r.verified ? <Icon name="checkmark-circle" color={C.blue} size={16} /> : null}
+          
+          <View style={styles.statsContainer}>
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{data.posts.length}</Text>
+              <Text style={styles.statLabel}>posts</Text>
             </View>
-            <Text style={styles.beat}>{r.beat || "Independent reporting"}</Text>
-            {r.location ? <Text style={styles.meta}>Based in {r.location}</Text> : null}
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{r.followers}</Text>
+              <Text style={styles.statLabel}>followers</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{r.following ?? 0}</Text>
+              <Text style={styles.statLabel}>following</Text>
+            </View>
           </View>
         </View>
 
-        <View style={styles.stats}>
-          <Stat label="DISPATCHES" value={data.posts.length} />
-          <Stat label="FOLLOWERS" value={r.followers} />
-          <Stat label="₹ SUPPORTED" value={r.support_total} />
+        {/* Bio Section */}
+        <View style={styles.bioSection}>
+          <Text style={styles.bioName}>{r.name}</Text>
+          <Text style={styles.bioText}>{r.beat || "Independent reporting from the ground."}</Text>
+          {r.location ? <Text style={styles.meta}>Based in {r.location}</Text> : null}
         </View>
 
-        <View style={styles.actions}>
-          {user?.role === "client" ? (
+        {r.is_live && r.live_room ? (
+          <Pressable style={styles.liveBanner} onPress={() => router.push({ pathname: "/(reader)/live/[room]", params: { room: r.live_room } })}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={styles.liveBannerDot} />
+              <Text style={styles.liveBannerText}>CURRENTLY LIVE</Text>
+            </View>
+            <Icon name="chevron-forward" color={colors.surface} size={16} />
+          </Pressable>
+        ) : null}
+
+        {/* Action Buttons */}
+        <View style={[styles.actionButtons, { zIndex: 10 }]}>
+          {user ? (
             <>
-              <Pressable
-                testID="profile-follow-toggle"
-                onPress={toggleFollow}
-                style={[styles.followBtn, r.is_following && styles.followingBtn]}
-              >
-                <Icon
-                  name={r.is_following ? "checkmark" : "add"}
-                  color={r.is_following ? C.ink : C.surface}
-                  size={17}
-                />
-                <Text style={[styles.followBtnText, r.is_following && { color: C.ink }]}>
-                  {r.is_following ? "Following" : "Follow"}
-                </Text>
+              <View style={{ flex: 1, zIndex: 10 }}>
+                <Pressable
+                  testID="profile-follow-toggle"
+                  onPress={() => {
+                    if (r.is_following) {
+                      setShowDropdown(!showDropdown);
+                    } else {
+                      toggleFollow();
+                    }
+                  }}
+                  style={[styles.actionBtn, r.is_following ? styles.followingBtn : { backgroundColor: colors.blue }]}
+                >
+                  <Text style={[styles.actionBtnText, { color: r.is_following ? colors.ink : colors.paper }]}>
+                    {r.is_following ? "Following" : "Follow"}
+                  </Text>
+                  {r.is_following && <Icon name="chevron-down" color={colors.ink} size={14} />}
+                </Pressable>
+
+                {showDropdown && (
+                  <View style={styles.dropdownMenu}>
+                    <Pressable style={styles.dropdownItem} onPress={performUnfollow}>
+                      <Text style={[styles.dropdownItemText, { color: colors.red }]}>Unfollow</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+
+              <Pressable testID="profile-message-button" onPress={() => router.push(`/messages/${r.id}` as any)} style={styles.actionBtn}>
+                <Text style={styles.actionBtnText}>Message</Text>
               </Pressable>
-              <Pressable testID="profile-support-button" onPress={() => setChoosingInterval(true)} style={styles.supportBtn}>
-                <Icon name="heart" color={C.surface} size={17} />
-                <Text style={styles.supportBtnText}>Support ₹7</Text>
+
+              <Pressable testID="profile-support-button" onPress={() => setChoosingInterval(true)} style={styles.iconBtn}>
+                <Icon name="heart-outline" color={colors.ink} size={20} />
               </Pressable>
             </>
           ) : (
-            <View style={{ flex: 1 }}>
-              <Text style={styles.meta}>Sign in as a reader to follow or support this reporter.</Text>
+            <View style={{ flex: 1, alignItems: "center", marginTop: 12 }}>
+              <Text style={styles.meta}>Sign in to follow or support this reporter.</Text>
             </View>
           )}
         </View>
 
-        <Text style={styles.overline}>DISPATCHES</Text>
-        {data.posts.length === 0 ? (
-          <EmptyState title="No dispatches yet." body="This reporter hasn't published anything yet." icon="document-text-outline" />
-        ) : (
-          data.posts.map((p) => (
-            <View key={p.id} style={styles.postCard}>
-              <Text style={styles.postKind}>{p.kind.toUpperCase()}</Text>
-              <Text style={styles.postTitle}>{p.title}</Text>
-              <Text style={styles.postBody} numberOfLines={3}>{p.body}</Text>
-              {p.media?.length ? (
-                <View style={{ gap: 10, marginTop: 12 }}>
-                  {p.media.map((m, idx) => (
-                    <MediaPlayer key={`${p.id}-${idx}`} media={m} />
-                  ))}
-                </View>
-              ) : null}
-              <View style={styles.postFooter}>
-                <Text style={styles.meta}>{p.location}</Text>
-              </View>
+        {/* Content Tabs & Grid */}
+        <View style={styles.contentTabs}>
+          <Pressable onPress={() => setActiveTab("grid")} style={[styles.tab, activeTab === "grid" && styles.activeTab]}>
+            <Icon name="grid-outline" color={activeTab === "grid" ? colors.ink : colors.muted} size={24} />
+          </Pressable>
+          <Pressable onPress={() => setActiveTab("video")} style={[styles.tab, activeTab === "video" && styles.activeTab]}>
+            <Icon name="videocam-outline" color={activeTab === "video" ? colors.ink : colors.muted} size={24} />
+          </Pressable>
+        </View>
+
+        {/* Grid Area */}
+        <View style={styles.grid}>
+          {data.posts.filter((p) => activeTab === "grid" || p.kind === "video").length === 0 ? (
+            <View style={{ width: "100%", padding: 32, alignItems: "center" }}>
+              <EmptyState title="No posts yet" body="This reporter hasn't published anything here." icon="images-outline" />
             </View>
-          ))
-        )}
+          ) : (
+            data.posts.filter((p) => activeTab === "grid" || p.kind === "video").map((p) => {
+              let mediaArr = p.media;
+              if (typeof mediaArr === "string") {
+                try { mediaArr = JSON.parse(mediaArr); } catch { mediaArr = []; }
+              }
+              const firstMedia = Array.isArray(mediaArr) && mediaArr.length > 0 && typeof mediaArr[0] === "object" ? mediaArr[0] : null;
+              return (
+                <Pressable key={p.id} onPress={() => router.push({ pathname: "/(reader)/post/[id]", params: { id: p.id } })} style={styles.gridItem}>
+                  {firstMedia?.playback_id ? (
+                    <MediaPlayer media={firstMedia} fill={true} radius={0} />
+                  ) : (
+                    <View style={{ flex: 1, backgroundColor: colors.surface, padding: 8, overflow: "hidden" }}>
+                      <Text style={{ fontSize: 10, fontWeight: "800", color: colors.muted }}>{p.kind.toUpperCase()}</Text>
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.ink, marginTop: 4 }} numberOfLines={3}>{p.title}</Text>
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
       <SupportChoiceSheet
         visible={choosingInterval}
         reporterName={r.name}
         onDismiss={() => setChoosingInterval(false)}
-        onChoose={startSupport}
+        onChoose={startCheckout}
       />
 
       <RazorpayCheckout
@@ -241,97 +330,166 @@ export default function ReporterProfile() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number | string }) {
-  return (
-    <View style={styles.stat}>
-      <Text style={styles.statNumber}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.paper },
+const createStyles = (colors: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
+  scroll: { paddingBottom: 60 },
+  topHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
   },
-  backBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  backText: { color: C.ink, fontSize: 14, fontWeight: "700" },
-  content: { padding: 20, paddingBottom: 60 },
-  top: { flexDirection: "row", alignItems: "center", gap: 14 },
+  username: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.ink,
+  },
+  profileHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    marginTop: 12,
+  },
+  avatarContainer: {
+    marginRight: 24,
+  },
   avatar: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: C.dark,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  avatarText: {
+    color: colors.paper,
+    fontSize: 32,
+    fontWeight: "800",
+  },
+  statsContainer: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  statBox: {
+    alignItems: "center",
+  },
+  statNumber: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.ink,
+  },
+  statLabel: {
+    fontSize: 13,
+    color: colors.ink,
+    marginTop: 2,
+  },
+  bioSection: {
+    paddingHorizontal: 16,
+    marginTop: 12,
+  },
+  bioName: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.ink,
+    marginBottom: 2,
+  },
+  bioText: {
+    fontSize: 14,
+    color: colors.ink,
+    lineHeight: 20,
+  },
+  meta: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  liveBanner: {
+    backgroundColor: colors.red,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginTop: 16,
+  },
+  liveBannerDot: { width: 8, height: 8, borderRadius: 8, backgroundColor: colors.surface },
+  liveBannerText: { color: colors.surface, fontSize: 11, fontWeight: "800", letterSpacing: 1.5 },
+  actionButtons: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    marginTop: 16,
+    gap: 8,
+  },
+  actionBtn: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    paddingVertical: 8,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
-  },
-  avatarInitial: { color: C.surface, fontSize: 26, fontWeight: "800" },
-  name: { color: C.ink, fontSize: 24, fontWeight: "800", letterSpacing: -0.5 },
-  beat: { color: C.ink, fontSize: 13, fontWeight: "700", marginTop: 4 },
-  meta: { color: C.muted, fontSize: 12, marginTop: 2 },
-  stats: {
     flexDirection: "row",
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: C.line,
-    marginTop: 20,
-    backgroundColor: C.surface,
+    gap: 4,
   },
-  stat: {
-    flex: 1,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    borderRightWidth: 1,
-    borderColor: C.line,
-    alignItems: "center",
+  followingBtn: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  actionBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.ink,
   },
-  statNumber: { fontSize: 20, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
-  statLabel: { color: C.muted, fontSize: 9, letterSpacing: 1, marginTop: 4, fontWeight: "800" },
-  actions: { flexDirection: "row", gap: 10, marginTop: 20, marginBottom: 22 },
-  followBtn: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: C.ink,
-    borderRadius: 6,
-  },
-  followingBtn: { backgroundColor: C.paper, borderWidth: 1, borderColor: C.line },
-  followBtnText: { color: C.surface, fontWeight: "800", fontSize: 14 },
-  supportBtn: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: C.red,
-    borderRadius: 6,
-  },
-  supportBtnText: { color: C.surface, fontWeight: "800", fontSize: 14 },
-  overline: { color: C.muted, fontSize: 11, letterSpacing: 1.5, fontWeight: "800", marginBottom: 10 },
-  postCard: {
-    backgroundColor: C.surface,
+  dropdownMenu: {
+    position: "absolute",
+    top: 40,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: C.line,
-    padding: 16,
-    marginBottom: 10,
-    borderRadius: 6,
+    borderColor: colors.line,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    zIndex: 100,
   },
-  postKind: { color: C.muted, fontSize: 10, letterSpacing: 1.5, fontWeight: "800", marginBottom: 6 },
-  postTitle: { color: C.ink, fontSize: 17, fontWeight: "800", marginBottom: 6 },
-  postBody: { color: C.muted, fontSize: 13, lineHeight: 20 },
-  postFooter: { flexDirection: "row", justifyContent: "space-between", marginTop: 10 },
-  mediaHint: { flexDirection: "row", alignItems: "center", gap: 4 },
-  mediaHintText: { color: C.muted, fontSize: 11, fontWeight: "700" },
+  dropdownItem: {
+    padding: 12,
+    alignItems: "center",
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  iconBtn: {
+    backgroundColor: colors.surface,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  contentTabs: {
+    flexDirection: "row",
+    marginTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  tab: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  activeTab: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.ink,
+  },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 2,
+    marginTop: 2,
+  },
+  gridItem: {
+    width: (windowWidth - 4) / 3,
+    height: (windowWidth - 4) / 3,
+  },
 });

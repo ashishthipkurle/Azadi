@@ -3,12 +3,15 @@ import { useRouter } from "expo-router";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAuth } from "@/src/auth";
-import { C } from "@/src/theme";
+import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 
 export function ReaderMenu({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { colors, isDark, toggle, mode } = useTheme();
+  const styles = createStyles(colors);
+
   const go = (path: string) => {
     onClose();
     router.push(path as any);
@@ -27,9 +30,12 @@ export function ReaderMenu({ visible, onClose }: { visible: boolean; onClose: ()
             </View>
           </View>
 
-          <Row icon="bookmark-outline" title="Saved dispatches" body="Your private reading list, cached for offline" testID="menu-saved" onPress={() => go("/(reader)/saved")} />
-          <Row icon="repeat" title="My pledges" body="Manage or cancel your monthly ₹7 support" testID="menu-pledges" onPress={() => go("/(reader)/pledges")} />
-          <Row icon="log-out-outline" title="Sign out" body="Leave your session on this device" testID="menu-logout" onPress={async () => { onClose(); await logout(); }} tone="red" />
+          <Row icon="notifications-outline" title="Notifications" body="Activity on your account and followed reporters" testID="menu-notifications" onPress={() => go("/(reader)/notifications")} colors={colors} styles={styles} />
+          <Row icon="chatbubbles-outline" title="Messages" body="Direct messages with reporters or other readers" testID="menu-messages" onPress={() => go("/messages")} colors={colors} styles={styles} />
+          <Row icon="bookmark-outline" title="Saved dispatches" body="Your private reading list, cached for offline" testID="menu-saved" onPress={() => go("/(reader)/saved")} colors={colors} styles={styles} />
+          <Row icon="repeat" title="My pledges" body="Manage or cancel your monthly ₹7 support" testID="menu-pledges" onPress={() => go("/(reader)/pledges")} colors={colors} styles={styles} />
+          <Row icon="moon-outline" title="Dark mode" body="Toggle light/dark appearance" testID="menu-dark-mode" onPress={() => toggle(isDark ? "light" : "dark")} colors={colors} styles={styles} />
+          <Row icon="log-out-outline" title="Sign out" body="Leave your session on this device" testID="menu-logout" onPress={async () => { onClose(); await logout(); }} tone="red" colors={colors} styles={styles} />
         </Pressable>
       </Pressable>
     </Modal>
@@ -43,6 +49,8 @@ function Row({
   onPress,
   testID,
   tone,
+  colors,
+  styles,
 }: {
   icon: any;
   title: string;
@@ -50,25 +58,27 @@ function Row({
   onPress: () => void;
   testID: string;
   tone?: string;
+  colors: any;
+  styles: any;
 }) {
   return (
     <Pressable testID={testID} onPress={onPress} style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}>
       <View style={styles.rowIcon}>
-        <Icon name={icon} color={tone || C.ink} size={19} />
+        <Icon name={icon} color={tone || colors.ink} size={19} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.rowTitle, tone ? { color: tone } : null]}>{title}</Text>
         <Text style={styles.rowBody}>{body}</Text>
       </View>
-      <Icon name="chevron-forward" color={C.muted} size={17} />
+      <Icon name="chevron-forward" color={colors.muted} size={17} />
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: "rgba(24,32,42,0.55)", justifyContent: "flex-end" },
   sheet: {
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     padding: 20,
     paddingBottom: 34,
     borderTopLeftRadius: 14,
@@ -85,29 +95,29 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: C.dark,
+    backgroundColor: colors.dark,
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarInitial: { color: C.surface, fontSize: 20, fontWeight: "800" },
-  name: { color: C.ink, fontSize: 16, fontWeight: "800" },
-  email: { color: C.muted, fontSize: 12, marginTop: 2 },
+  avatarInitial: { color: colors.surface, fontSize: 20, fontWeight: "800" },
+  name: { color: colors.ink, fontSize: 16, fontWeight: "800" },
+  email: { color: colors.muted, fontSize: 12, marginTop: 2 },
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: C.line,
+    borderTopColor: colors.line,
     paddingVertical: 14,
   },
   rowIcon: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: C.paper,
+    backgroundColor: colors.paper,
     alignItems: "center",
     justifyContent: "center",
   },
-  rowTitle: { color: C.ink, fontWeight: "800", fontSize: 14 },
-  rowBody: { color: C.muted, fontSize: 12, marginTop: 3 },
+  rowTitle: { color: colors.ink, fontWeight: "800", fontSize: 14 },
+  rowBody: { color: colors.muted, fontSize: 12, marginTop: 3 },
 });

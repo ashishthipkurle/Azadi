@@ -53,10 +53,11 @@ async def find_one(
     filters: dict[str, Any],
     *,
     exclude_columns: list[str] | None = None,
+    select_columns: str = "*",
 ) -> dict | None:
     """Find a single row matching all filters. Returns None if not found."""
     sb = get_client()
-    columns = _columns_except(exclude_columns)
+    columns = _columns_except(exclude_columns) if exclude_columns else select_columns
     query = sb.table(table).select(columns)
     query = _apply_filters(query, filters)
     result = query.maybe_single().execute()
@@ -70,13 +71,14 @@ async def find_many(
     filters: dict[str, Any] | None = None,
     *,
     exclude_columns: list[str] | None = None,
+    select_columns: str = "*",
     order_by: str | None = None,
     desc: bool = True,
     limit: int | None = None,
 ) -> list[dict]:
     """Find multiple rows. Returns an empty list if nothing matches."""
     sb = get_client()
-    columns = _columns_except(exclude_columns)
+    columns = _columns_except(exclude_columns) if exclude_columns else select_columns
     query = sb.table(table).select(columns)
     if filters:
         query = _apply_filters(query, filters)
@@ -151,7 +153,30 @@ async def rpc(function_name: str, params: dict[str, Any] | None = None) -> list[
     return result.data or []
 
 
+async def search_posts(query: str, limit: int = 50) -> list[dict]:
+    """Search posts using PostgreSQL full-text search."""
+    sb = get_client()
+    result = sb.table("posts").select("*").or_(f"title.ilike.%{query}%,body.ilike.%{query}%").limit(limit).execute()
+    return result.data or []
+
+
+async def search_reporters(query: str, limit: int = 20) -> list[dict]:
+    """Search reporters by name or beat."""
+    sb = get_client()
+    # PostgREST or_ filter
+    result = sb.table("users").select("*").eq("role", "reporter").or_(f"name.ilike.%{query}%,beat.ilike.%{query}%").limit(limit).execute()
+    return result.data or []
+
+
 # ─── Internal helpers ────────────────────────────────────────
+
+
+
+async def search_users(query: str, limit: int = 20) -> list[dict]:
+    """Search normal readers by name."""
+    sb = get_client()
+    result = sb.table("users").select("*").eq("role", "client").ilike("name", f"%{query}%").limit(limit).execute()
+    return result.data or []
 
 
 def _columns_except(exclude: list[str] | None) -> str:
@@ -173,6 +198,9 @@ def _apply_filters(query: Any, filters: dict[str, Any]) -> Any:
       {"$lt": value}   → .lt(col, value)
     """
     for key, value in filters.items():
+        if key == "$or_string":
+            query = query.or_(value)
+            continue
         if isinstance(value, dict):
             for op, val in value.items():
                 if op == "$ne":
@@ -183,6 +211,8 @@ def _apply_filters(query: Any, filters: dict[str, Any]) -> Any:
                     query = query.gte(key, val)
                 elif op == "$lt":
                     query = query.lt(key, val)
+                elif op == "$gt":
+                    query = query.gt(key, val)
         else:
             query = query.eq(key, value)
     return query

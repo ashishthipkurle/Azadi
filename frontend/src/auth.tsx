@@ -20,6 +20,7 @@ type AuthState = {
   ready: boolean;
   user: AuthUser | null;
   login: (email: string, password: string) => Promise<AuthUser>;
+  loginAnonymous: () => Promise<AuthUser>;
   register: (name: string, email: string, password: string, role: Role) => Promise<AuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -53,6 +54,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return res.user;
   }, []);
 
+  const loginAnonymous = useCallback(async () => {
+    const res = await apiPost<{ access_token: string; user: AuthUser }>("/auth/anonymous", {});
+    await storage.secureSet(TOKEN_KEY, res.access_token);
+    setUser(res.user);
+    return res.user;
+  }, []);
+
   const register = useCallback(async (name: string, email: string, password: string, role: Role) => {
     const res = await apiPost<{ access_token: string; user: AuthUser }>("/auth/register", { name, email, password, role });
     await storage.secureSet(TOKEN_KEY, res.access_token);
@@ -76,8 +84,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ ready, user, login, register, logout, refresh }),
-    [ready, user, login, register, logout, refresh],
+    () => ({ ready, user, login, loginAnonymous, register, logout, refresh }),
+    [ready, user, login, loginAnonymous, register, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
