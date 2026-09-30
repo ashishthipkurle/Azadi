@@ -9,7 +9,9 @@ import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { useE2EE } from "@/src/hooks/use-e2ee";
 import { Icon } from "@/src/ui";
-
+import { getLocalMessages, saveLocalMessages } from "@/src/utils/local-db";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 
 type Message = {
   id: string;
@@ -20,6 +22,22 @@ type Message = {
   read: boolean;
   created_at: string;
 };
+
+// Component to handle offline media caching
+function CachedImage({ url, style, contentFit }: { url: string; style: any; contentFit: string }) {
+  const [localUri, setLocalUri] = useState<string | null>(null);
+  
+  useEffect(() => {
+    let active = true;
+    getCachedMedia(url).then(res => {
+      if (active) setLocalUri(res);
+    });
+    return () => { active = false; };
+  }, [url]);
+
+  if (!localUri) return <View style={[style, { backgroundColor: "rgba(0,0,0,0.05)" }]} />;
+  return <Image source={{ uri: localUri }} style={style} contentFit={contentFit as any} />;
+}
 
 export default function ChatScreen() {
   const { id: otherId, name } = useLocalSearchParams<{ id: string; name: string }>();
@@ -43,33 +61,44 @@ export default function ChatScreen() {
 
   const load = useCallback(async () => {
     try {
+      if (!user) return;
       const [data, uData] = await Promise.all([
         apiGet<Message[]>(`/messages/${otherId}`),
         apiGet<{ name: string; avatar_url?: string }>(`/users/${otherId}/basic`).catch(() => null)
       ]);
+      
+      // Save pulled messages to SQLite local DB
+      saveLocalMessages(data, user.id);
+      
       setMessages(prev => {
         const dataIds = new Set(data.map(m => m.id));
-        // Keep any messages (temp or real) that are in our local state but missing from the server response
-        // This prevents the "disappearing" glitch if a poll finishes with stale data just after we sent a message.
         const missingLocals = prev.filter(m => !dataIds.has(m.id));
-        
         const merged = [...data, ...missingLocals];
-        // Sort ascending by created_at
         merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         return merged;
       });
       if (uData) setOtherUser(uData);
     } catch {
+      // On failure, offline mode already loaded the local DB below!
     } finally {
       setLoading(false);
     }
-  }, [otherId]);
+  }, [otherId, user]);
 
   useEffect(() => {
+    // 1. Instantly load messages from SQLite cache on mount
+    if (user) {
+      const local = getLocalMessages(otherId);
+      if (local.length > 0) {
+        setMessages(local.reverse()); // SQLite returns DESC, we want ASC
+      }
+    }
+    
+    // 2. Poll server for updates
     load();
     const interval = setInterval(load, 2000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, otherId, user]);
 
   // Handle decryption
   useEffect(() => {
@@ -110,9 +139,9 @@ export default function ChatScreen() {
     });
   }, [messages, isReady, decrypt, decryptedMessages, user?.id]);
 
-  const send = async () => {
-    const text = body.trim();
-    if (text.length === 0 || sending || !isReady || !user?.id) return;
+  const sendMessage = async (textMessage: string) => {
+    const text = textMessage.trim();
+    if (text.length === 0 || !isReady || !user?.id) return;
     setSending(true);
     
     // 1. Optimistic update (instantaneous UI response)
@@ -129,9 +158,8 @@ export default function ChatScreen() {
     
     setDecryptedMessages(prev => ({ ...prev, [tempId]: text }));
     setMessages((prev) => [...prev, tempMsg]);
-    setBody("");
     
-    // 2. Encrypt asynchronously (might fetch public keys from network on first try)
+    // 2. Encrypt asynchronously
     let ciphertext = text;
     let encrypted = false;
     try {
@@ -161,6 +189,47 @@ export default function ChatScreen() {
     } catch {
       // Rollback on failure
       setMessages((prev) => prev.filter(m => m.id !== tempId));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const send = async () => {
+    if (sending) return;
+    const text = body;
+    setBody("");
+    await sendMessage(text);
+  };
+
+  const attachMedia = async () => {
+    if (sending || !isReady) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.8,
+    });
+    
+    if (result.canceled || !result.assets.length) return;
+    const asset = result.assets[0];
+    setSending(true);
+    
+    try {
+      // 1. Get Presigned URL
+      const { upload_url, public_url } = await apiPost<{ upload_url: string; public_url: string }>("/storage/upload-url", {
+        filename: asset.fileName || "media.jpg",
+        content_type: asset.mimeType || "image/jpeg"
+      });
+      
+      // 2. Upload direct to Cloudflare R2
+      await FileSystem.uploadAsync(upload_url, asset.uri, {
+        httpMethod: "PUT",
+        headers: { "Content-Type": asset.mimeType || "image/jpeg" }
+      });
+      
+      // 3. Send message containing the URL
+      await sendMessage(`[MEDIA] ${public_url}`);
+    } catch (e) {
+      console.error("Media upload failed", e);
+      alert("Failed to upload media. Please try again.");
     } finally {
       setSending(false);
     }
@@ -203,14 +272,19 @@ export default function ChatScreen() {
             renderItem={({ item }) => {
               const isMine = item.sender_id === user?.id;
               const isTemp = item.id.startsWith("temp-");
+              const dec = item.encrypted ? (decryptedMessages[item.id] || "🔒 Decrypting...") : item.body;
+              
+              const isMedia = dec.startsWith("[MEDIA] ");
+              const mediaUrl = isMedia ? dec.substring(8) : null;
+              
               return (
                 <View style={{
                   alignSelf: isMine ? "flex-end" : "flex-start",
                   backgroundColor: isMine ? colors.ink : colors.surface,
                   borderWidth: isMine ? 0 : 1,
                   borderColor: colors.line,
-                  paddingHorizontal: 16,
-                  paddingVertical: 12,
+                  paddingHorizontal: isMedia ? 4 : 16,
+                  paddingVertical: isMedia ? 4 : 12,
                   borderRadius: 20,
                   borderBottomRightRadius: isMine ? 4 : 20,
                   borderBottomLeftRadius: isMine ? 20 : 4,
@@ -221,11 +295,20 @@ export default function ChatScreen() {
                   shadowOpacity: 0.05,
                   shadowRadius: 2,
                   elevation: 1,
+                  overflow: "hidden"
                 }}>
-                  <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>
-                    {item.encrypted ? (decryptedMessages[item.id] || "🔒 Decrypting...") : item.body}
-                  </Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4, alignSelf: isMine ? "flex-end" : "flex-start" }}>
+                  {isMedia ? (
+                    <CachedImage 
+                      url={mediaUrl as string} 
+                      style={{ width: 200, height: 200, borderRadius: 16 }}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>
+                      {dec}
+                    </Text>
+                  )}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4, marginRight: isMedia ? 8 : 0, alignSelf: "flex-end" }}>
                     <Text style={{ color: isMine ? "rgba(255,255,255,0.7)" : colors.muted, fontSize: 10 }}>
                       {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </Text>
@@ -243,6 +326,14 @@ export default function ChatScreen() {
           />
         )}
         <View style={{ flexDirection: "row", padding: 12, gap: 10, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.surface, alignItems: "flex-end" }}>
+          <Pressable
+            onPress={attachMedia}
+            disabled={sending || !isReady}
+            style={{ width: 48, height: 48, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="attach" color={colors.muted} size={28} />
+          </Pressable>
+          
           <View style={{ flex: 1, backgroundColor: colors.paper, borderRadius: 24, minHeight: 48, paddingHorizontal: 16, justifyContent: "center" }}>
             <TextInput
               style={{ flex: 1, margin: 0, paddingVertical: 12, fontSize: 15, color: colors.ink, outlineStyle: "none" } as any}

@@ -6,7 +6,6 @@ import Constants from "expo-constants";
 import { storage } from "@/src/utils/storage";
 
 const RAW =
-  process.env.EXPO_PUBLIC_BACKEND_URL ||
   process.env.EXPO_PUBLIC_RELAY_URL ||
   (Constants.expoConfig?.extra as any)?.backendUrl ||
   "";
