@@ -420,6 +420,68 @@ async def _follower_count(reporter_id: str) -> int:
     return await db.count("follows", {"reporter_id": reporter_id})
 
 
+@api_router.get("/search")
+async def search_all(q: str = "", user: dict = Depends(current_user)):
+    if not q or len(q.strip()) < 2:
+        return {"posts": [], "reporters": [], "users": []}
+    
+    q = q.strip()
+    posts = await db.search_posts(q)
+    reporters = await db.search_reporters(q)
+    users = await db.search_users(q)
+    
+    # Strip sensitive fields from users and reporters
+    reporters = [_strip_keys(r, ["password_hash"]) for r in reporters]
+    users = [_strip_keys(u, ["password_hash"]) for u in users]
+
+    # Annotate reporters with support and follower counts
+    reporter_ids = [r["id"] for r in reporters]
+    totals = await _support_totals(reporter_ids)
+    fc_rows = await db.rpc("follower_counts", {"reporter_ids": reporter_ids}) if reporter_ids else []
+    fc_map = {row["reporter_id"]: row["count"] for row in fc_rows}
+    
+    for r in reporters:
+        r["followers"] = fc_map.get(r["id"], 0)
+        r["support_total"] = totals.get(r["id"], 0)
+        
+    # Annotate posts with author, bookmarks, tips, upvotes
+    if posts:
+        post_ids = [p["id"] for p in posts]
+        
+        b_rows = await db.rpc("post_bookmarks", {"post_ids": post_ids})
+        b_map = {row["post_id"]: row["count"] for row in b_rows}
+        
+        my_b = await db.find_many("bookmarks", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+        my_b_set = {b["post_id"] for b in my_b}
+        
+        # Upvotes
+        u_rows = await db.rpc("post_upvotes", {"post_ids": post_ids})
+        u_map = {row["post_id"]: row["count"] for row in u_rows}
+        
+        my_u = await db.find_many("upvotes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+        my_u_set = {u["post_id"] for u in my_u}
+        
+        author_ids = list({p["reporter_id"] for p in posts})
+        authors = await db.find_many("users", {"id": {"$in": author_ids}})
+        author_map = {a["id"]: a for a in authors}
+        
+        for p in posts:
+            a = author_map.get(p["reporter_id"])
+            p["author_name"] = a["name"] if a else "Unknown"
+            p["author_verified"] = a.get("verified", False) if a else False
+            p["bookmarked"] = p["id"] in my_b_set
+            p["bookmarks"] = b_map.get(p["id"], 0)
+            p["upvoted"] = p["id"] in my_u_set
+            p["upvotes"] = u_map.get(p["id"], 0)
+            p["support_total"] = totals.get(p["reporter_id"], 0)
+
+    return {
+        "posts": posts,
+        "reporters": reporters,
+        "users": users
+    }
+
+
 @api_router.get("/reporters")
 async def list_reporters():
     users = await db.find_many(
@@ -594,6 +656,44 @@ async def delete_post(post_id: str, user: dict = Depends(current_user)):
     await db.delete_one("posts", {"id": post_id})
     return {"ok": True}
 
+@api_router.post("/storage/upload-url")
+async def create_storage_upload(payload: UploadCreate, user: dict = Depends(current_user)):
+    """Generate a presigned URL to upload a file directly to Supabase Storage."""
+    from backend.database import get_client
+    supabase = get_client()
+    bucket = "media"
+    
+    # Generate unique key for the file
+    ext = payload.filename.split(".")[-1] if "." in payload.filename else ""
+    key = f"uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    
+    # Try to ensure bucket exists (requires service_role key to bypass RLS)
+    try:
+        buckets = supabase.storage.list_buckets()
+        if bucket not in [b.name for b in buckets]:
+            supabase.storage.create_bucket(bucket, options={'public': True})
+    except Exception:
+        pass
+        
+    # Generate Presigned URL for upload
+    res = supabase.storage.from_(bucket).create_signed_upload_url(key)
+    
+    # In supabase-py, if there is an error it usually returns a dict with 'error'
+    if isinstance(res, dict) and "error" in res:
+        raise HTTPException(500, f"Supabase storage error: {res.get('message', res['error'])}")
+        
+    upload_url = res.get("signedUrl") or res.get("signed_url") or res
+    if isinstance(res, dict) and "url" in res:
+         upload_url = res["url"] # Just in case it's named 'url'
+         
+    # URL to access the file after upload
+    public_url = supabase.storage.from_(bucket).get_public_url(key)
+    
+    return {
+        "upload_url": upload_url,
+        "key": key,
+        "public_url": public_url
+    }
 
 @api_router.post("/media/upload-url")
 async def create_upload(payload: UploadCreate, user: dict = Depends(require_roles("reporter", "admin"))):
