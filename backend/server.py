@@ -20,9 +20,14 @@ from pwdlib import PasswordHash
 from starlette.middleware.cors import CORSMiddleware
 
 import database as db
+from cryptography.fernet import Fernet
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+
+backend_fernet = None
+if os.environ.get("BACKEND_ENCRYPTION_KEY"):
+    backend_fernet = Fernet(os.environ["BACKEND_ENCRYPTION_KEY"].encode())
 app = FastAPI(title="Azadi API")
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
@@ -1119,6 +1124,11 @@ async def get_conversations(user: dict = Depends(current_user)):
     # Group by conversation partner
     convos = {}
     for msg in all_msgs:
+        if backend_fernet:
+            try:
+                msg["body"] = backend_fernet.decrypt(msg["body"].encode()).decode()
+            except Exception:
+                pass # fallback for legacy unencrypted DB rows
         other_id = msg["receiver_id"] if msg["sender_id"] == user_id else msg["sender_id"]
         if other_id not in convos:
             convos[other_id] = msg
@@ -1151,6 +1161,13 @@ async def get_messages(other_id: str, user: dict = Depends(current_user)):
     query = {"$or_string": f"and(sender_id.eq.{user_id},receiver_id.eq.{other_id}),and(sender_id.eq.{other_id},receiver_id.eq.{user_id})"}
     msgs = await db.find_many("messages", query, order_by="created_at", desc=False)
     
+    if backend_fernet:
+        for m in msgs:
+            try:
+                m["body"] = backend_fernet.decrypt(m["body"].encode()).decode()
+            except Exception:
+                pass
+    
     # Mark as read if user is receiver
     unread_ids = [m["id"] for m in msgs if m["receiver_id"] == user_id and not m["read"]]
     if unread_ids:
@@ -1168,11 +1185,15 @@ from fastapi import BackgroundTasks
 
 @api_router.post("/messages/{other_id}")
 async def send_message(other_id: str, payload: MessageCreate, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+    encrypted_body = payload.body
+    if backend_fernet:
+        encrypted_body = backend_fernet.encrypt(payload.body.encode()).decode()
+
     msg_data = {
         "id": str(uuid.uuid4()),
         "sender_id": user["id"],
         "receiver_id": other_id,
-        "body": payload.body,
+        "body": encrypted_body,
         "encrypted": payload.encrypted,
         "read": False,
         "created_at": now()
@@ -1191,6 +1212,30 @@ async def send_message(other_id: str, payload: MessageCreate, background_tasks: 
     
     return msg
 
+
+class PushTokenCreate(BaseModel):
+    token: str
+    platform: Optional[str] = None
+
+@api_router.post("/push-tokens")
+async def register_push_token(payload: PushTokenCreate, user: dict = Depends(current_user)):
+    # Upsert token
+    data = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "token": payload.token,
+        "created_at": now()
+    }
+    # check if token already exists for this user
+    existing = await db.find_many("push_tokens", {"user_id": user["id"], "token": payload.token})
+    if not existing:
+        await db.insert_one("push_tokens", data)
+    return {"ok": True}
+
+@api_router.delete("/push-tokens")
+async def unregister_push_token(token: str, user: dict = Depends(current_user)):
+    await db.delete_many("push_tokens", {"user_id": user["id"], "token": token})
+    return {"ok": True}
 
 @api_router.get("/users/{user_id}/basic")
 async def get_user_basic(user_id: str, user: dict = Depends(current_user)):
