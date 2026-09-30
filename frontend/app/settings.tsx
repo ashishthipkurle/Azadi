@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, Icon } from "@/src/ui";
+import { storage } from "@/src/utils/storage";
 
 export default function Settings() {
   const { colors, mode, toggle } = useTheme();
@@ -47,10 +48,17 @@ export default function Settings() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>SECURITY</Text>
-          <Pressable style={styles.row} onPress={() => Alert.alert("Tor Routing", "Install the Orbot app from the Play Store. Once running, Azadi will automatically route all traffic through Tor's local SOCKS proxy (127.0.0.1:9050).")}>
+          <Pressable style={styles.row} onPress={async () => {
+            const current = await storage.secureGet("use_proxy", "false");
+            const next = current === "true" ? "false" : "true";
+            await storage.secureSet("use_proxy", next);
+            Alert.alert("Proxy Changed", `Secure Relay Mode is now ${next === "true" ? "ON" : "OFF"}. Please restart the app.`, [
+                { text: "OK" }
+            ]);
+          }}>
             <Icon name="shield-checkmark-outline" color={colors.ink} size={22} />
-            <Text style={styles.rowText}>🧅 Maximum Anonymity (Tor)</Text>
-            <Icon name="information-circle-outline" color={colors.muted} size={20} />
+            <Text style={styles.rowText}>🧅 Secure Relay Proxy</Text>
+            <Icon name="swap-horizontal-outline" color={colors.muted} size={20} />
           </Pressable>
         </View>
 

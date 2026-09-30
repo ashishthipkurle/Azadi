@@ -40,8 +40,17 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
+async function getUrl(path: string): Promise<string> {
+  const useProxy = await storage.secureGet("use_proxy", "false");
+  const targetUrl = `${API}${path}`;
+  if (useProxy === "true") {
+    return `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`;
+  }
+  return targetUrl;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(await getUrl(path), {
     headers: { ...(await authHeaders()) },
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
@@ -49,11 +58,20 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiGetPaginated<T>(path: string, cursorKey: string, cursorValue?: string): Promise<T> {
-  const url = new URL(`${API}${path}`);
+  const base = await getUrl(path);
+  const url = new URL(base);
+  
+  let finalUrl = base;
   if (cursorValue) {
-    url.searchParams.append(cursorKey, cursorValue);
+    if (base.includes("corsproxy.io")) {
+      finalUrl = `https://corsproxy.io/?url=${encodeURIComponent(`${API}${path}?${cursorKey}=${cursorValue}`)}`;
+    } else {
+      url.searchParams.append(cursorKey, cursorValue);
+      finalUrl = url.toString();
+    }
   }
-  const res = await fetch(url.toString(), {
+    
+  const res = await fetch(finalUrl, {
     headers: { ...(await authHeaders()) },
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
@@ -61,7 +79,7 @@ export async function apiGetPaginated<T>(path: string, cursorKey: string, cursor
 }
 
 export async function apiPost<T>(path: string, body?: any): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(await getUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: body != null ? JSON.stringify(body) : undefined,
@@ -71,7 +89,7 @@ export async function apiPost<T>(path: string, body?: any): Promise<T> {
 }
 
 export async function apiPatch<T>(path: string, body?: any): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(await getUrl(path), {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: body != null ? JSON.stringify(body) : undefined,
@@ -81,7 +99,7 @@ export async function apiPatch<T>(path: string, body?: any): Promise<T> {
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(await getUrl(path), {
     method: "DELETE",
     headers: { ...(await authHeaders()) },
   });
