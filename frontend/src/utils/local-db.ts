@@ -101,12 +101,12 @@ export async function getCachedMedia(url: string): Promise<string> {
   }
 
   // Not cached, download it
-  const filename = url.split("/").pop() || \`media-\${Date.now()}\`;
-  const fileUri = \`\${FileSystem.documentDirectory}\${filename}\`;
+  const filename = url.split("/").pop() || `media-${Date.now()}`;
+  const fileUri = `${FileSystem.documentDirectory}${filename}`;
   
   try {
     const { uri } = await FileSystem.downloadAsync(url, fileUri);
-    db.runSync(\`INSERT OR REPLACE INTO media_cache (url, local_uri) VALUES (?, ?)\`, [url, uri]);
+    db.runSync(`INSERT OR REPLACE INTO media_cache (url, local_uri) VALUES (?, ?)`, [url, uri]);
     return uri;
   } catch (e) {
     console.error("Failed to cache media", e);
