@@ -1,5 +1,5 @@
 // Welcome screen — full-screen carousel with images, shown before auth.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
@@ -12,6 +12,7 @@ import {
   ViewToken,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { useVideoPlayer, VideoView } from "expo-video";
 
 import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
@@ -22,11 +23,13 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 const heroImg = require("@/assets/images/welcome_hero.jpg");
 const supportImg = require("@/assets/images/welcome_support.jpg");
 const communityImg = require("@/assets/images/welcome_community.jpg");
+const welcomeVideo = require("@/assets/videos/Welcome screen video one.mp4");
 
 const SLIDES = [
   {
     key: "1",
     image: heroImg,
+    video: welcomeVideo,
     overline: "INDEPENDENT JOURNALISM",
     title: "Your story.\nYour signal.",
     body: "A place for field reporters and the people who choose to listen — without editorial gatekeeping.",
@@ -34,6 +37,7 @@ const SLIDES = [
   {
     key: "2",
     image: supportImg,
+    video: null,
     overline: "DIRECT SUPPORT",
     title: "Back the reporters\nyou trust.",
     body: "100% of your support reaches the reporter after platform fees. No middlemen, fully transparent.",
@@ -41,11 +45,49 @@ const SLIDES = [
   {
     key: "3",
     image: communityImg,
+    video: null,
     overline: "ACCOUNTABLE MODERATION",
     title: "No silent\ntakedowns.",
     body: "Every moderation action is evidence-based, transparent, and always appealable.",
   },
 ];
+
+function WelcomeSlide({ item, isActive }: { item: (typeof SLIDES)[0]; isActive: boolean }) {
+  const player = useVideoPlayer(item.video, player => {
+    player.loop = true;
+    player.muted = false;
+  });
+
+  useEffect(() => {
+    if (item.video && player) {
+      if (isActive) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    }
+  }, [isActive, item.video, player]);
+
+  return (
+    <View style={styles.slide}>
+      {item.video ? (
+        <VideoView player={player} style={styles.slideImage} contentFit="cover" nativeControls={false} />
+      ) : (
+        <Image source={item.image} style={styles.slideImage} resizeMode="cover" />
+      )}
+      <LinearGradient
+        colors={["transparent", "rgba(24,32,42,0.75)", "rgba(24,32,42,0.95)"]}
+        locations={[0.25, 0.55, 1]}
+        style={styles.gradient}
+      />
+      <View style={styles.slideContent}>
+        <Text style={styles.overline}>{item.overline}</Text>
+        <Text style={styles.slideTitle}>{item.title}</Text>
+        <Text style={styles.slideBody}>{item.body}</Text>
+      </View>
+    </View>
+  );
+}
 
 export function WelcomeScreen({ onSignIn, onCreateAccount }: { onSignIn: () => void; onCreateAccount: () => void }) {
   const { colors } = useTheme();
@@ -68,20 +110,8 @@ export function WelcomeScreen({ onSignIn, onCreateAccount }: { onSignIn: () => v
     }
   };
 
-  const renderSlide = ({ item }: { item: (typeof SLIDES)[0] }) => (
-    <View style={styles.slide}>
-      <Image source={item.image} style={styles.slideImage} resizeMode="cover" />
-      <LinearGradient
-        colors={["transparent", "rgba(24,32,42,0.75)", "rgba(24,32,42,0.95)"]}
-        locations={[0.25, 0.55, 1]}
-        style={styles.gradient}
-      />
-      <View style={styles.slideContent}>
-        <Text style={styles.overline}>{item.overline}</Text>
-        <Text style={styles.slideTitle}>{item.title}</Text>
-        <Text style={styles.slideBody}>{item.body}</Text>
-      </View>
-    </View>
+  const renderSlide = ({ item, index }: { item: (typeof SLIDES)[0]; index: number }) => (
+    <WelcomeSlide item={item} isActive={index === activeIndex} />
   );
 
   const isLast = activeIndex === SLIDES.length - 1;

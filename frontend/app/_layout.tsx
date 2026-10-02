@@ -1,8 +1,10 @@
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Animated, LogBox, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { useEventListener } from "expo";
+import { useVideoPlayer, VideoView } from "expo-video";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
@@ -31,6 +33,15 @@ function PushManager() {
 
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
+  const [isVideoFinished, setIsVideoFinished] = useState(false);
+
+  const player = useVideoPlayer(require("@/assets/videos/opening animation.mp4"), player => {
+    player.play();
+  });
+
+  useEventListener(player, 'playToEnd', () => {
+    setIsVideoFinished(true);
+  });
 
   useEffect(() => {
     if (loaded || error) {
@@ -47,6 +58,11 @@ export default function RootLayout() {
       <AuthProvider>
         <PushManager />
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
+        {!isVideoFinished && (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: "#000000", zIndex: 1000 }]} pointerEvents="none">
+            <VideoView player={player} style={{ flex: 1 }} contentFit="cover" nativeControls={false} />
+          </View>
+        )}
       </AuthProvider>
     </SafeAreaProvider>
   );
