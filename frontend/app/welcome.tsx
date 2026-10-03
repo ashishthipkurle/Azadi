@@ -23,7 +23,7 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 const heroImg = require("@/assets/images/welcome_hero.jpg");
 const supportImg = require("@/assets/images/welcome_support.jpg");
 const communityImg = require("@/assets/images/welcome_community.jpg");
-const welcomeVideo = require("@/assets/videos/Welcome screen video one.mp4");
+const welcomeVideo = require("@/assets/videos/welcome_video_one.mp4");
 
 const SLIDES = [
   {

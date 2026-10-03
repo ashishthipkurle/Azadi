@@ -35,7 +35,7 @@ export default function RootLayout() {
   const [loaded, error] = useIconFonts();
   const [isVideoFinished, setIsVideoFinished] = useState(false);
 
-  const player = useVideoPlayer(require("@/assets/videos/opening animation.mp4"), player => {
+  const player = useVideoPlayer(require("@/assets/videos/opening_animation.mp4"), player => {
     player.play();
   });
 
