@@ -5,6 +5,7 @@ import {
   Dimensions,
   FlatList,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -55,7 +56,8 @@ const SLIDES = [
 function WelcomeSlide({ item, isActive }: { item: (typeof SLIDES)[0]; isActive: boolean }) {
   const player = useVideoPlayer(item.video, player => {
     player.loop = true;
-    player.muted = false;
+    // Browsers block autoplay of unmuted videos; mute on web for initial autoplay.
+    player.muted = Platform.OS === "web";
   });
 
   useEffect(() => {
@@ -70,11 +72,30 @@ function WelcomeSlide({ item, isActive }: { item: (typeof SLIDES)[0]; isActive: 
 
   return (
     <View style={styles.slide}>
-      {item.video ? (
-        <VideoView player={player} style={styles.slideImage} contentFit="cover" nativeControls={false} />
-      ) : (
-        <Image source={item.image} style={styles.slideImage} resizeMode="cover" />
-      )}
+      <View style={{
+        position: "absolute",
+        width: "100%",
+        height: "100%",
+        maxWidth: "100%",
+        maxHeight: "100%",
+        aspectRatio: 9 / 16,
+        overflow: "hidden",
+      }}>
+        {item.video ? (
+          <VideoView 
+            player={player} 
+            style={{ width: "100%", height: "100%", transform: [{ scale: 1.015 }] }} 
+            contentFit="fill" 
+            nativeControls={false} 
+          />
+        ) : (
+          <Image 
+            source={item.image} 
+            style={{ width: "100%", height: "100%" }} 
+            resizeMode="stretch" 
+          />
+        )}
+      </View>
       <LinearGradient
         colors={["transparent", "rgba(24,32,42,0.75)", "rgba(24,32,42,0.95)"]}
         locations={[0.25, 0.55, 1]}
@@ -306,3 +327,10 @@ const styles = StyleSheet.create({
     textDecorationLine: "underline" as const,
   },
 });
+
+// Expo Router requires every file in the `app` directory to have a default export.
+// We export a dummy component here to satisfy the router, while the actual WelcomeScreen 
+// is used as a named export in `app/index.tsx`.
+export default function WelcomeRoute() {
+  return null;
+}

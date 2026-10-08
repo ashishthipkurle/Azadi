@@ -1,7 +1,7 @@
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect, useState } from "react";
-import { Animated, LogBox, StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Animated, LogBox, Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { useEventListener } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -31,13 +31,67 @@ function PushManager() {
   return null;
 }
 
+// Helper for Web video splash to bypass expo-video limitations
+function WebVideoSplash({ onFinish }: { onFinish: () => void }) {
+  // Expo's Asset module will give us the actual URL to the video file
+  const [uri, setUri] = useState<string | null>(null);
+  
+  useEffect(() => {
+    import("expo-asset").then(async ({ Asset }) => {
+      const asset = await Asset.loadAsync(require("@/assets/videos/opening_animation.mp4"));
+      setUri(asset[0].localUri || asset[0].uri);
+    });
+    
+    // Fallback in case video fails to load or play
+    const timeout = setTimeout(onFinish, 6000);
+    return () => clearTimeout(timeout);
+  }, [onFinish]);
+
+  if (!uri) return <View style={{ flex: 1, backgroundColor: "#F4F0E8" }} />;
+
+  return (
+    <View style={{
+      width: "100%",
+      height: "100%",
+      maxWidth: "100%",
+      maxHeight: "100%",
+      aspectRatio: 9 / 16,
+      overflow: "hidden",
+    }}>
+      {/* @ts-ignore - React Native Web supports rendering standard DOM elements */}
+      <video
+        src={uri}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "fill",
+          backgroundColor: "#F4F0E8",
+          border: "none",
+          outline: "none",
+          transform: "scale(1.015)", // Imperceptible 1.5% scale just to push the 1px artifact past the overflow:hidden wrapper
+        }}
+        autoPlay
+        muted
+        playsInline
+        onEnded={onFinish}
+      />
+    </View>
+  );
+}
+
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
   const [isVideoFinished, setIsVideoFinished] = useState(false);
 
-  const player = useVideoPlayer(require("@/assets/videos/opening_animation.mp4"), player => {
-    player.play();
-  });
+  // --- Native: use the real video splash ---
+  const player = useVideoPlayer(
+    Platform.OS !== "web" ? require("@/assets/videos/opening_animation.mp4") : null,
+    player => {
+      if (Platform.OS !== "web") {
+        player.play();
+      }
+    },
+  );
 
   useEventListener(player, 'playToEnd', () => {
     setIsVideoFinished(true);
@@ -59,9 +113,17 @@ export default function RootLayout() {
         <PushManager />
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
         {!isVideoFinished && (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: "#000000", zIndex: 1000 }]} pointerEvents="none">
-            <VideoView player={player} style={{ flex: 1 }} contentFit="cover" nativeControls={false} />
-          </View>
+          Platform.OS === "web" ? (
+            // Web: robust HTML5 video splash
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8", zIndex: 1000, justifyContent: "center", alignItems: "center" }]} pointerEvents="none">
+              <WebVideoSplash onFinish={() => setIsVideoFinished(true)} />
+            </View>
+          ) : (
+            // Native: real video splash
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F6EEE0", zIndex: 1000 }]} pointerEvents="none">
+              <VideoView player={player} style={{ flex: 1 }} contentFit="contain" nativeControls={false} />
+            </View>
+          )
         )}
       </AuthProvider>
     </SafeAreaProvider>

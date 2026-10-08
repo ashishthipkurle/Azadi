@@ -28,7 +28,7 @@ import { MediaPlayer, type MediaAttachment } from "@/src/media-player";
 import { RazorpayCheckout, type CheckoutOrder } from "@/src/razorpay";
 import { SupportChoiceSheet, type SupportInterval } from "@/src/support-choice";
 import { sharePost } from "@/src/share";
-import {   } from "@/src/theme";
+import { } from "@/src/theme";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast, ConfirmModal } from "@/src/ui";
 
@@ -98,7 +98,7 @@ export default function Feed() {
   const [hasUnread, setHasUnread] = useState(false);
   const [newDispatchesCount, setNewDispatchesCount] = useState(0);
 
-  const [followedReporters, setFollowedReporters] = useState<{id: string, name: string, avatar_url?: string, verified: boolean}[]>([]);
+  const [followedReporters, setFollowedReporters] = useState<{ id: string, name: string, avatar_url?: string, verified: boolean }[]>([]);
   const [selectedFollowingReporterId, setSelectedFollowingReporterId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -186,7 +186,7 @@ export default function Feed() {
     const currentPosts = tab === "following" ? followingPosts : allPosts;
     if (currentPosts.length === 0) return;
     const last = currentPosts[currentPosts.length - 1];
-    
+
     setLoadingMore(true);
     try {
       let url = `/feed${tab === "following" ? "/following" : ""}${topic !== "All" ? `?topic=${topic}` : ""}`;
@@ -330,100 +330,103 @@ export default function Feed() {
           ListHeaderComponent={
             <>
               <Text style={styles.hello}>Hey {user?.name?.split(" ")[0] || "there"}.</Text>
-          <Text style={styles.headline}>Today&apos;s ground truth.</Text>
+              <Text style={styles.headline}>Today&apos;s ground truth.</Text>
 
-          <View style={styles.tabRow}>
-            {(["all", "following", "trending"] as const).map((t) => (
-              <Pressable
-                key={t}
-                testID={`feed-tab-${t}`}
-                onPress={() => setTab(t)}
-                style={[styles.tab, tab === t && styles.tabActive]}
-              >
-                <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                  {t === "all" ? "All" : t === "following" ? `Following · ${followedReporters.length}` : "Trending"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          {tab === "following" && followedReporters.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyStrip} style={{ marginBottom: 16 }}>
-              <Pressable
-                onPress={() => setSelectedFollowingReporterId(null)}
-                style={styles.storyAvatarContainer}
-              >
-                <View style={[styles.storyAvatarWrap, selectedFollowingReporterId === null && styles.storyAvatarActive]}>
-                  <View style={[styles.storyAvatarFallback, { backgroundColor: colors.surface }]}>
-                    <Icon name="people" color={colors.ink} size={24} />
-                  </View>
-                </View>
-                <Text style={styles.storyAvatarName} numberOfLines={1}>All</Text>
-              </Pressable>
-
-              {followedReporters.map(r => {
-                const isActive = selectedFollowingReporterId === r.id;
-                return (
+              <View style={styles.tabRow}>
+                {(["all", "following", "trending"] as const).map((t) => (
                   <Pressable
-                    key={r.id}
-                    onPress={() => setSelectedFollowingReporterId(isActive ? null : r.id)}
-                    style={styles.storyAvatarContainer}
+                    key={t}
+                    testID={`feed-tab-${t}`}
+                    onPress={() => {
+                      setTab(t);
+                      if (t !== "following") setSelectedFollowingReporterId(null);
+                    }}
+                    style={[styles.tab, tab === t && styles.tabActive]}
                   >
-                    <View style={[styles.storyAvatarWrap, isActive && styles.storyAvatarActive]}>
-                      {r.avatar_url ? (
-                        <Image source={{ uri: r.avatar_url }} style={styles.storyAvatar} />
-                      ) : (
-                        <View style={styles.storyAvatarFallback}>
-                          <Text style={styles.storyAvatarFallbackText}>{r.name?.[0]}</Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text style={[styles.storyAvatarName, isActive && { color: colors.ink, fontWeight: "700" }]} numberOfLines={1}>
-                      {r.name.split(" ")[0]}
+                    <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                      {t === "all" ? "All" : t === "following" ? `Following` : "Trending"}
                     </Text>
                   </Pressable>
-                );
-              })}
-            </ScrollView>
-          )}
-
-          {newDispatchesCount > 0 ? (
-            <Pressable testID="new-dispatches-banner" style={styles.newDispatchesBanner} onPress={onRefresh}>
-              <Icon name="arrow-up" color={colors.surface} size={14} />
-              <Text style={styles.newDispatchesText}>{newDispatchesCount} new dispatch{newDispatchesCount === 1 ? '' : 'es'}</Text>
-            </Pressable>
-          ) : null}
-
-          {liveSessions.length ? (
-            <View style={styles.liveStrip}>
-              <View style={styles.liveStripHeader}>
-                <View style={styles.liveDot} />
-                <Text style={styles.liveStripLabel}>LIVE NOW · {liveSessions.length}</Text>
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-                {liveSessions.map((s) => (
-                  <Pressable
-                    key={s.id}
-                    testID={`live-tile-${s.room}`}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/(reader)/live/[room]",
-                        params: { room: s.room, title: s.title, reporter: s.reporter_name },
-                      })
-                    }
-                    style={styles.liveTile}
-                  >
-                    <View style={styles.liveTilePill}>
-                      <View style={styles.liveDot} />
-                      <Text style={styles.liveTilePillText}>LIVE</Text>
-                    </View>
-                    <Text style={styles.liveTileTitle} numberOfLines={2}>{s.title}</Text>
-                    <Text style={styles.liveTileMeta}>{s.reporter_name}</Text>
-                  </Pressable>
                 ))}
-              </ScrollView>
-            </View>
-          ) : null}
+              </View>
+
+              {tab === "following" && followedReporters.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyStrip} style={{ marginBottom: 16 }}>
+                  <Pressable
+                    onPress={() => setSelectedFollowingReporterId(null)}
+                    style={styles.storyAvatarContainer}
+                  >
+                    <View style={[styles.storyAvatarWrap, selectedFollowingReporterId === null && styles.storyAvatarActive]}>
+                      <View style={[styles.storyAvatarFallback, { backgroundColor: colors.surface }]}>
+                        <Icon name="people" color={colors.ink} size={24} />
+                      </View>
+                    </View>
+                    <Text style={[styles.storyAvatarName, selectedFollowingReporterId === null && { color: colors.ink, fontWeight: "700" }]} numberOfLines={1}>All</Text>
+                  </Pressable>
+                  
+                  {followedReporters.map(r => {
+                    const isActive = selectedFollowingReporterId === r.id;
+                    return (
+                      <Pressable
+                        key={r.id}
+                        onPress={() => setSelectedFollowingReporterId(isActive ? null : r.id)}
+                        style={styles.storyAvatarContainer}
+                      >
+                        <View style={[styles.storyAvatarWrap, isActive && styles.storyAvatarActive]}>
+                          {r.avatar_url ? (
+                            <Image source={{ uri: r.avatar_url }} style={styles.storyAvatar} />
+                          ) : (
+                            <View style={styles.storyAvatarFallback}>
+                              <Text style={styles.storyAvatarFallbackText}>{r.name?.[0]}</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={[styles.storyAvatarName, isActive && { color: colors.ink, fontWeight: "700" }]} numberOfLines={1}>
+                          {r.name.split(" ")[0]}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              {newDispatchesCount > 0 ? (
+                <Pressable testID="new-dispatches-banner" style={styles.newDispatchesBanner} onPress={onRefresh}>
+                  <Icon name="arrow-up" color={colors.surface} size={14} />
+                  <Text style={styles.newDispatchesText}>{newDispatchesCount} new dispatch{newDispatchesCount === 1 ? '' : 'es'}</Text>
+                </Pressable>
+              ) : null}
+
+              {liveSessions.length ? (
+                <View style={styles.liveStrip}>
+                  <View style={styles.liveStripHeader}>
+                    <View style={styles.liveDot} />
+                    <Text style={styles.liveStripLabel}>LIVE NOW · {liveSessions.length}</Text>
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+                    {liveSessions.map((s) => (
+                      <Pressable
+                        key={s.id}
+                        testID={`live-tile-${s.room}`}
+                        onPress={() =>
+                          router.push({
+                            pathname: "/(reader)/live/[room]",
+                            params: { room: s.room, title: s.title, reporter: s.reporter_name },
+                          })
+                        }
+                        style={styles.liveTile}
+                      >
+                        <View style={styles.liveTilePill}>
+                          <View style={styles.liveDot} />
+                          <Text style={styles.liveTilePillText}>LIVE</Text>
+                        </View>
+                        <Text style={styles.liveTileTitle} numberOfLines={2}>{s.title}</Text>
+                        <Text style={styles.liveTileMeta}>{s.reporter_name}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
             </>
           }
           ListEmptyComponent={
@@ -579,45 +582,45 @@ export default function Feed() {
             <>
               {loadingMore && <ActivityIndicator color={colors.red} style={{ marginVertical: 20 }} />}
               <View style={styles.reporterBlock}>
-            <Text style={styles.overline}>FIND YOUR REPORTER</Text>
-            <Text style={styles.blockHeading}>Support the work, not the noise.</Text>
-            {reporters.length === 0 ? (
-              <Text style={styles.meta}>No reporters yet. Invite one to join.</Text>
-            ) : (
-              reporters.map((r) => (
-                <Pressable
-                  key={r.id}
-                  testID={`reader-open-reporter-card-${r.id}`}
-                  onPress={() => router.push({ pathname: "/(reader)/reporter/[id]", params: { id: r.id } })}
-                  style={styles.reporterRow}
-                >
-                  <View style={styles.reporterMark}>
-                    <Text style={styles.reporterInitial}>{r.name[0]}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.reporterName}>
-                      {r.name}{" "}
-                      {r.verified ? <Icon name="checkmark-circle" size={13} color={colors.blue} /> : null}
-                    </Text>
-                    <Text style={styles.meta}>
-                      {r.beat} · {r.followers} follower{r.followers === 1 ? "" : "s"}
-                      {r.support_total ? ` · ₹${r.support_total} supported` : ""}
-                    </Text>
-                  </View>
-                  <Pressable
-                    testID="support-seven-rupees-button"
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      openSupport(r);
-                    }}
-                    style={styles.supportSmall}
-                  >
-                    <Text style={styles.supportSmallText}>₹7</Text>
-                  </Pressable>
-                </Pressable>
-              ))
-            )}
-          </View>
+                <Text style={styles.overline}>FIND YOUR REPORTER</Text>
+                <Text style={styles.blockHeading}>Support the work, not the noise.</Text>
+                {reporters.length === 0 ? (
+                  <Text style={styles.meta}>No reporters yet. Invite one to join.</Text>
+                ) : (
+                  reporters.map((r) => (
+                    <Pressable
+                      key={r.id}
+                      testID={`reader-open-reporter-card-${r.id}`}
+                      onPress={() => router.push({ pathname: "/(reader)/reporter/[id]", params: { id: r.id } })}
+                      style={styles.reporterRow}
+                    >
+                      <View style={styles.reporterMark}>
+                        <Text style={styles.reporterInitial}>{r.name[0]}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.reporterName}>
+                          {r.name}{" "}
+                          {r.verified ? <Icon name="checkmark-circle" size={13} color={colors.blue} /> : null}
+                        </Text>
+                        <Text style={styles.meta}>
+                          {r.beat} · {r.followers} follower{r.followers === 1 ? "" : "s"}
+                          {r.support_total ? ` · ₹${r.support_total} supported` : ""}
+                        </Text>
+                      </View>
+                      <Pressable
+                        testID="support-seven-rupees-button"
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          openSupport(r);
+                        }}
+                        style={styles.supportSmall}
+                      >
+                        <Text style={styles.supportSmallText}>₹7</Text>
+                      </Pressable>
+                    </Pressable>
+                  ))
+                )}
+              </View>
             </>
           }
         />
@@ -678,7 +681,7 @@ export default function Feed() {
       />
 
       {toast ? <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} /> : null}
-    
+
       <ConfirmModal
         visible={showReporterModal}
         title="Become a Reporter"
@@ -735,7 +738,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   storyAvatarContainer: { alignItems: "center", gap: 6, width: 64 },
   storyAvatarWrap: {
     width: 60, height: 60, borderRadius: 30,
-    borderWidth: 2, borderColor: "transparent",
+    borderWidth: 2, borderColor: colors.line,
     alignItems: "center", justifyContent: "center",
   },
   storyAvatarActive: { borderColor: colors.red },

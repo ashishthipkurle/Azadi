@@ -9,7 +9,7 @@ import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { useE2EE } from "@/src/hooks/use-e2ee";
 import { Icon } from "@/src/ui";
-import { getLocalMessages, saveLocalMessages } from "@/src/utils/local-db";
+import { getLocalMessages, saveLocalMessages, getCachedMedia } from "@/src/utils/local-db";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 
@@ -68,7 +68,7 @@ export default function ChatScreen() {
       ]);
       
       // Save pulled messages to SQLite local DB
-      saveLocalMessages(data, user.id);
+      saveLocalMessages(data, user.id).catch(console.error);
       
       setMessages(prev => {
         const dataIds = new Set(data.map(m => m.id));
@@ -88,10 +88,11 @@ export default function ChatScreen() {
   useEffect(() => {
     // 1. Instantly load messages from SQLite cache on mount
     if (user) {
-      const local = getLocalMessages(otherId);
-      if (local.length > 0) {
-        setMessages(local.reverse()); // SQLite returns DESC, we want ASC
-      }
+      getLocalMessages(otherId).then(local => {
+        if (local.length > 0) {
+          setMessages(local.reverse()); // SQLite returns DESC, we want ASC
+        }
+      }).catch(console.error);
     }
     
     // 2. Poll server for updates

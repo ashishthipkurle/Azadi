@@ -29,6 +29,15 @@ backend_fernet = None
 if os.environ.get("BACKEND_ENCRYPTION_KEY"):
     backend_fernet = Fernet(os.environ["BACKEND_ENCRYPTION_KEY"].encode())
 app = FastAPI(title="Azadi API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 password_hash = PasswordHash.recommended()
@@ -248,13 +257,6 @@ async def seed_data():
             "created_at": now(),
             "disabled": False,
         })
-    # Seed a few posts if none exist
-    post_count = await db.count("posts")
-    if post_count == 0:
-        await db.insert_many("posts", [
-            {"id": str(uuid.uuid4()), "reporter_id": reporter_id, "reporter_name": "Rhea Iyer", "verified": True, "title": "The river is rising. The village is still waiting.", "body": "A field dispatch from the eastern floodplain, where residents are building their own warning network.", "kind": "field report", "location": "Kosi floodplain", "stats": "1.8k reads", "created_at": now()},
-            {"id": str(uuid.uuid4()), "reporter_id": reporter_id, "reporter_name": "Rhea Iyer", "verified": True, "title": "Inside the last independent print room", "body": "A visual report on the people keeping local records alive, one page at a time.", "kind": "photo essay", "location": "Old Delhi", "stats": "842 reads", "created_at": now()},
-        ])
 
 
 @app.on_event("startup")
@@ -300,23 +302,51 @@ async def login(payload: Login):
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(current_user)):
-    return public_user(user)
+    following_count = await db.count("follows", {"supporter_id": user["id"]})
+    return public_user(user) | {"following": following_count, "friends": user.get("friends", 0)}
 
 
 @api_router.get("/feed")
-async def feed():
-    return await db.find_many("posts", order_by="created_at", desc=True, limit=50)
+async def feed(topic: Optional[str] = None, before: Optional[str] = None, since: Optional[str] = None):
+    filters = {}
+    if topic and topic != "All":
+        filters["topic"] = topic
+    if before:
+        filters["created_at"] = {"$lt": before}
+    elif since:
+        filters["created_at"] = {"$gt": since}
+        
+    return await db.find_many("posts", filters, order_by="created_at", desc=True, limit=50)
 
 
 @api_router.get("/feed/following")
-async def feed_following(user: dict = Depends(current_user)):
-    follows = await db.find_many("follows", {"supporter_id": user["id"]})
-    ids = [row["reporter_id"] for row in follows]
+async def feed_following(
+    user: dict = Depends(current_user), 
+    topic: Optional[str] = None,
+    reporter_id: Optional[str] = None,
+    before: Optional[str] = None, 
+    since: Optional[str] = None
+):
+    if reporter_id:
+        ids = [reporter_id]
+    else:
+        follows = await db.find_many("follows", {"supporter_id": user["id"]})
+        ids = [row["reporter_id"] for row in follows]
+        
     if not ids:
         return []
+        
+    filters = {"reporter_id": {"$in": ids}}
+    if topic and topic != "All":
+        filters["topic"] = topic
+    if before:
+        filters["created_at"] = {"$lt": before}
+    elif since:
+        filters["created_at"] = {"$gt": since}
+        
     return await db.find_many(
         "posts",
-        {"reporter_id": {"$in": ids}},
+        filters,
         order_by="created_at",
         desc=True,
         limit=100,
@@ -515,6 +545,34 @@ async def list_reporters():
     ]
 
 
+@api_router.get("/reporters/following")
+async def get_reporters_following(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+    if not credentials:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    viewer_id = claims.get("sub")
+    
+    follows = await db.find_many("follows", {"supporter_id": viewer_id})
+    reporter_ids = [f["reporter_id"] for f in follows]
+    if not reporter_ids:
+        return []
+        
+    users = await db.find_many("users", {"id": {"$in": reporter_ids}, "role": "reporter", "disabled": False})
+    
+    return [
+        {
+            "id": u["id"],
+            "name": u["name"],
+            "avatar_url": u.get("avatar_url"),
+            "verified": u.get("verified", False)
+        }
+        for u in users
+    ]
+
+
 @api_router.get("/reporters/{reporter_id}")
 async def get_reporter(reporter_id: str, credentials: HTTPAuthorizationCredentials = Depends(bearer)):
     user = await db.find_one("users", {"id": reporter_id, "role": "reporter"})
@@ -534,11 +592,13 @@ async def get_reporter(reporter_id: str, credentials: HTTPAuthorizationCredentia
             is_following = follow_row is not None
         except Exception:
             viewer = None
+    following_count = await db.count("follows", {"supporter_id": reporter_id})
     return {
         "reporter": public_user(user) | {
             "beat": user.get("beat"),
             "location": user.get("location"),
             "followers": followers,
+            "following": following_count,
             "support_total": totals.get(reporter_id, 0),
             "is_following": is_following,
         },
