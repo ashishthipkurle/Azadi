@@ -10,7 +10,7 @@ FILES = [
 ]
 
 def process_file(filepath):
-    full_path = os.path.join(r"d:\All Projects\My News App\Azadi\Azadi-\frontend\src", filepath)
+    full_path = os.path.join(r"d:\All Projects\My News App\Azadi\Azadi\frontend\src", filepath)
     if not os.path.exists(full_path):
         return
 
