@@ -14,8 +14,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://azadi-production-eb77.up.railway.app",
-        "EXPO_PUBLIC_RELAY_URL": "https://azadi-production-eb77.up.railway.app"
+        "EXPO_PUBLIC_RELAY_URL": "https://cdn-services-production.up.railway.app"
       }
     },
     "production": {}
