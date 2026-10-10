@@ -133,9 +133,16 @@ export default function Index() {
     try {
       if (mode === "register") await register(name.trim(), email.trim(), password, role);
       else await login(email.trim(), password);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Auth error:", e);
-      const message = e instanceof ApiError ? e.message : "Could not reach the server. Try again in a moment.";
+      let message: string;
+      if (e instanceof ApiError) {
+        message = e.message;
+      } else if (e instanceof TypeError && e.message?.includes("Network request failed")) {
+        message = "Could not reach the server. Check your internet connection and try again.";
+      } else {
+        message = e?.message || "Something went wrong. Please try again.";
+      }
       setToast({ message, tone: "error" });
     } finally {
       setBusy(false);
@@ -304,20 +311,12 @@ export default function Index() {
                 </Text>
               </Pressable>
 
+
               {mode === "login" && (
                 <Pressable onPress={() => setMode("forgot_password")} style={styles.toggle}>
                   <Text style={styles.toggleText}>Forgot password?</Text>
                 </Pressable>
               )}
-
-              {mode === "login" ? (
-                <View style={styles.demoBox}>
-                  <Overline>TRY THE PLATFORM</Overline>
-                  <Text style={styles.demoLine}>Admin · admin@azadi.in / admin123</Text>
-                  <Text style={styles.demoLine}>Reporter · rhea@azadi.in / reporter123</Text>
-                  <Text style={styles.demoLine}>Reader · reader@azadi.in / reader123</Text>
-                </View>
-              ) : null}
             </>
           )}
         </ScrollView>
@@ -374,13 +373,4 @@ const createStyles = (colors: any) => StyleSheet.create({
   roleChipTextActive: { color: colors.surface },
   toggle: { marginTop: 16, alignItems: "center" },
   toggleText: { color: colors.muted, fontSize: 13, textDecorationLine: "underline" },
-  demoBox: {
-    marginTop: 28,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 14,
-    backgroundColor: colors.surface,
-    gap: 4,
-  },
-  demoLine: { color: colors.ink, fontSize: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
 });

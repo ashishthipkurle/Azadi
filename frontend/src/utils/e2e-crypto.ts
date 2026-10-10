@@ -141,3 +141,88 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const Buffer = require('buffer').Buffer;
   return Buffer.from(base64, 'base64').buffer;
 }
+
+
+// ─── AES-256-GCM Media Encryption ────────────────────────────────────────────
+// Used to encrypt images/videos before uploading. The AES key is then
+// embedded inside the E2EE message body so only sender + recipient can
+// decrypt the actual media file.
+
+function getRandomBytes(length: number): Uint8Array {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).crypto?.getRandomValues) {
+    const buf = new Uint8Array(length);
+    (globalThis as any).crypto.getRandomValues(buf);
+    return buf;
+  }
+  if (typeof window !== 'undefined' && window.crypto) {
+    const buf = new Uint8Array(length);
+    window.crypto.getRandomValues(buf);
+    return buf;
+  }
+  // Insecure fallback — should never be reached on real devices
+  const buf = new Uint8Array(length);
+  for (let i = 0; i < length; i++) buf[i] = Math.floor(Math.random() * 256);
+  return buf;
+}
+
+/** Generate a random 256-bit AES key and return it as a base64 string. */
+export function generateMediaKey(): string {
+  const rawKey = getRandomBytes(32); // 256 bits
+  return arrayBufferToBase64(rawKey.buffer);
+}
+
+/** Encrypt base64-encoded file data with AES-256-GCM. Returns base64(iv + ciphertext + tag). */
+export async function encryptMediaData(base64Data: string, base64Key: string): Promise<string> {
+  const subtle = getCryptoSubtle();
+  const keyBytes = base64ToArrayBuffer(base64Key);
+  const iv = getRandomBytes(12); // 96-bit IV for GCM
+
+  const aesKey = await subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  );
+
+  const plainBytes = base64ToArrayBuffer(base64Data);
+  const cipherBuf = await subtle.encrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    plainBytes
+  );
+
+  // Prepend IV to ciphertext: [12 bytes IV] + [ciphertext + GCM tag]
+  const combined = new Uint8Array(iv.byteLength + cipherBuf.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(cipherBuf), iv.byteLength);
+
+  return arrayBufferToBase64(combined.buffer);
+}
+
+/** Decrypt base64(iv + ciphertext + tag) with AES-256-GCM. Returns the original base64 file data. */
+export async function decryptMediaData(base64Encrypted: string, base64Key: string): Promise<string> {
+  const subtle = getCryptoSubtle();
+  const keyBytes = base64ToArrayBuffer(base64Key);
+  const combined = new Uint8Array(base64ToArrayBuffer(base64Encrypted));
+
+  // Split IV (first 12 bytes) from ciphertext
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+
+  const aesKey = await subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  );
+
+  const plainBuf = await subtle.decrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    ciphertext
+  );
+
+  return arrayBufferToBase64(plainBuf);
+}

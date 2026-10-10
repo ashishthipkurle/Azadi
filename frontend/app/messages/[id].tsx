@@ -10,6 +10,7 @@ import { useTheme } from "@/src/hooks/use-theme";
 import { useE2EE } from "@/src/hooks/use-e2ee";
 import { Icon } from "@/src/ui";
 import { getLocalMessages, saveLocalMessages, getCachedMedia } from "@/src/utils/local-db";
+import { generateMediaKey, encryptMediaData, decryptMediaData } from "@/src/utils/e2e-crypto";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 
@@ -23,19 +24,44 @@ type Message = {
   created_at: string;
 };
 
-// Component to handle offline media caching
-function CachedImage({ url, style, contentFit }: { url: string; style: any; contentFit: string }) {
+// Component to handle offline media caching and encrypted media decryption
+function CachedImage({ url, style, contentFit, mediaKey }: { url: string; style: any; contentFit: string; mediaKey?: string }) {
   const [localUri, setLocalUri] = useState<string | null>(null);
   
   useEffect(() => {
     let active = true;
-    getCachedMedia(url).then(res => {
-      if (active) setLocalUri(res);
-    });
+    (async () => {
+      try {
+        if (mediaKey) {
+          // Encrypted media: download raw bytes, decrypt, write to temp file
+          const encryptedB64 = await FileSystem.readAsStringAsync(
+            await getCachedMedia(url),
+            { encoding: FileSystem.EncodingType.Base64 }
+          ).catch(async () => {
+            // If getCachedMedia returned a URL (not a file), download it first
+            const tmpPath = `${FileSystem.cacheDirectory}enc_${Date.now()}`;
+            await FileSystem.downloadAsync(url, tmpPath);
+            return await FileSystem.readAsStringAsync(tmpPath, { encoding: FileSystem.EncodingType.Base64 });
+          });
+          
+          const decryptedB64 = await decryptMediaData(encryptedB64, mediaKey);
+          const decPath = `${FileSystem.cacheDirectory}dec_${Date.now()}.jpg`;
+          await FileSystem.writeAsStringAsync(decPath, decryptedB64, { encoding: FileSystem.EncodingType.Base64 });
+          if (active) setLocalUri(decPath);
+        } else {
+          // Unencrypted media (legacy)
+          const cached = await getCachedMedia(url);
+          if (active) setLocalUri(cached);
+        }
+      } catch (e) {
+        console.error("Media load/decrypt failed:", e);
+        if (active) setLocalUri(url); // fallback to raw URL
+      }
+    })();
     return () => { active = false; };
-  }, [url]);
+  }, [url, mediaKey]);
 
-  if (!localUri) return <View style={[style, { backgroundColor: "rgba(0,0,0,0.05)" }]} />;
+  if (!localUri) return <View style={[style, { backgroundColor: "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }]}><ActivityIndicator size="small" /></View>;
   return <Image source={{ uri: localUri }} style={style} contentFit={contentFit as any} />;
 }
 
@@ -214,22 +240,40 @@ export default function ChatScreen() {
     setSending(true);
     
     try {
-      // 1. Get Presigned URL
+      // 1. Read file as base64
+      const fileBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      // 2. Generate AES-256 key and encrypt the file
+      const mediaKey = generateMediaKey();
+      const encryptedBase64 = await encryptMediaData(fileBase64, mediaKey);
+      
+      // 3. Write encrypted data to a temp file
+      const encTempPath = `${FileSystem.cacheDirectory}enc_upload_${Date.now()}.bin`;
+      await FileSystem.writeAsStringAsync(encTempPath, encryptedBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      // 4. Get presigned upload URL
       const { upload_url, public_url } = await apiPost<{ upload_url: string; public_url: string }>("/storage/upload-url", {
-        filename: asset.fileName || "media.jpg",
-        content_type: asset.mimeType || "image/jpeg"
+        filename: (asset.fileName || "media") + ".enc",
+        content_type: "application/octet-stream"
       });
       
-      // 2. Upload direct to Cloudflare R2
-      await FileSystem.uploadAsync(upload_url, asset.uri, {
+      // 5. Upload the encrypted file (not the original)
+      await FileSystem.uploadAsync(upload_url, encTempPath, {
         httpMethod: "PUT",
-        headers: { "Content-Type": asset.mimeType || "image/jpeg" }
+        headers: { "Content-Type": "application/octet-stream" }
       });
       
-      // 3. Send message containing the URL
-      await sendMessage(`[MEDIA] ${public_url}`);
+      // 6. Clean up temp file
+      await FileSystem.deleteAsync(encTempPath, { idempotent: true });
+      
+      // 7. Send message with URL + AES key embedded (the key is E2E encrypted along with the message)
+      await sendMessage(`[EMEDIA] ${public_url} ${mediaKey}`);
     } catch (e) {
-      console.error("Media upload failed", e);
+      console.error("Encrypted media upload failed", e);
       alert("Failed to upload media. Please try again.");
     } finally {
       setSending(false);
@@ -275,8 +319,20 @@ export default function ChatScreen() {
               const isTemp = item.id.startsWith("temp-");
               const dec = item.encrypted ? (decryptedMessages[item.id] || "🔒 Decrypting...") : item.body;
               
-              const isMedia = dec.startsWith("[MEDIA] ");
-              const mediaUrl = isMedia ? dec.substring(8) : null;
+              // Support both new encrypted media [EMEDIA] and legacy unencrypted [MEDIA]
+              const isEncMedia = dec.startsWith("[EMEDIA] ");
+              const isLegacyMedia = dec.startsWith("[MEDIA] ");
+              const isMedia = isEncMedia || isLegacyMedia;
+              let mediaUrl: string | null = null;
+              let mediaKey: string | undefined = undefined;
+              
+              if (isEncMedia) {
+                const parts = dec.substring(9).split(" ");
+                mediaUrl = parts[0];
+                mediaKey = parts[1]; // AES key was E2E encrypted with the message
+              } else if (isLegacyMedia) {
+                mediaUrl = dec.substring(8);
+              }
               
               return (
                 <View style={{
@@ -303,6 +359,7 @@ export default function ChatScreen() {
                       url={mediaUrl as string} 
                       style={{ width: 200, height: 200, borderRadius: 16 }}
                       contentFit="cover"
+                      mediaKey={mediaKey}
                     />
                   ) : (
                     <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>

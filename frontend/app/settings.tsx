@@ -46,22 +46,6 @@ export default function Settings() {
           </Pressable>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>SECURITY</Text>
-          <Pressable style={styles.row} onPress={async () => {
-            const current = await storage.secureGet("use_proxy", "false");
-            const next = current === "true" ? "false" : "true";
-            await storage.secureSet("use_proxy", next);
-            Alert.alert("Proxy Changed", `Secure Relay Mode is now ${next === "true" ? "ON" : "OFF"}. Please restart the app.`, [
-                { text: "OK" }
-            ]);
-          }}>
-            <Icon name="shield-checkmark-outline" color={colors.ink} size={22} />
-            <Text style={styles.rowText}>🧅 Secure Relay Proxy</Text>
-            <Icon name="swap-horizontal-outline" color={colors.muted} size={20} />
-          </Pressable>
-        </View>
-
         {user?.role === "reporter" && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>REPORTER</Text>

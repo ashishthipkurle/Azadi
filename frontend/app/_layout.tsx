@@ -111,19 +111,20 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <PushManager />
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
-        {!isVideoFinished && (
+        {!isVideoFinished ? (
           Platform.OS === "web" ? (
-            // Web: robust HTML5 video splash
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8", zIndex: 1000, justifyContent: "center", alignItems: "center" }]} pointerEvents="none">
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8", justifyContent: "center", alignItems: "center" }]}>
               <WebVideoSplash onFinish={() => setIsVideoFinished(true)} />
             </View>
           ) : (
-            // Native: real video splash
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F6EEE0", zIndex: 1000 }]} pointerEvents="none">
-              <VideoView player={player} style={{ flex: 1 }} contentFit="contain" nativeControls={false} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8" }]}>
+              <View style={{ position: "absolute", width: "100%", height: "100%", maxWidth: "100%", maxHeight: "100%", aspectRatio: 9 / 16, overflow: "hidden" }}>
+                <VideoView player={player} style={{ width: "100%", height: "100%", transform: [{ scale: 1.015 }] }} contentFit="fill" nativeControls={false} />
+              </View>
             </View>
           )
+        ) : (
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
         )}
       </AuthProvider>
     </SafeAreaProvider>
