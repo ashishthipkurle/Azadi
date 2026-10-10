@@ -84,6 +84,7 @@ export default function RootLayout() {
   const [isVideoFinished, setIsVideoFinished] = useState(false);
 
   // --- Native: use the real video splash ---
+  const videoReady = useRef(false);
   const player = useVideoPlayer(
     Platform.OS !== "web" ? require("@/assets/videos/opening_animation.mp4") : null,
     player => {
@@ -93,14 +94,29 @@ export default function RootLayout() {
     },
   );
 
+  // Listen for video playback starting — hide native splash only then
+  useEventListener(player, 'statusChange', (ev: any) => {
+    if (!videoReady.current && ev?.status === 'readyToPlay') {
+      videoReady.current = true;
+      SplashScreen.hideAsync();
+    }
+  });
+
   useEventListener(player, 'playToEnd', () => {
     setIsVideoFinished(true);
   });
 
   useEffect(() => {
-    if (loaded || error) {
+    // On web or if fonts error out, hide splash immediately
+    if (Platform.OS === "web" && (loaded || error)) {
       SplashScreen.hideAsync();
     }
+    // Safety timeout: hide native splash after 4s no matter what
+    // (prevents the app from getting stuck on the static logo)
+    const timeout = setTimeout(() => {
+      SplashScreen.hideAsync();
+    }, 4000);
+    return () => clearTimeout(timeout);
   }, [loaded, error]);
 
   // If the CDN is unreachable we fall through on error rather than wedging
