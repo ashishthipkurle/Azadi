@@ -55,6 +55,12 @@ STRIP_RESPONSE_HEADERS = {
 }
 
 
+@app.get("/")
+async def root():
+    """Generic health check that reveals nothing about the actual service."""
+    return {"status": "ok"}
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def proxy(path: str, request: Request):
     """Transparent zero-log reverse proxy."""
@@ -97,12 +103,6 @@ async def proxy(path: str, request: Request):
         return Response(content='{"detail":"Service unavailable"}', status_code=502, media_type="application/json")
     except Exception:
         return Response(content='{"detail":"Service error"}', status_code=502, media_type="application/json")
-
-
-@app.get("/")
-async def root():
-    """Generic health check that reveals nothing about the actual service."""
-    return {"status": "ok"}
 
 
 if __name__ == "__main__":
