@@ -11,6 +11,7 @@ import { Button, Icon, EmptyState } from "@/src/ui";
 import { apiGet } from "@/src/api";
 import { MediaPlayer } from "@/src/media-player";
 import { shareProfile } from "@/src/share";
+import { AppHeader } from "@/src/shared/app-header";
 
 export default function Profile() {
   const { colors } = useTheme();
@@ -54,40 +55,11 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <View style={styles.topHeader}>
-        {/* Left Side: Create Button */}
-        <View style={{ flex: 1, alignItems: "flex-start" }}>
-          <Pressable onPress={() => {
-            if (user?.role === "reporter") {
-              router.push("/(reporter)/studio");
-            }
-          }} style={{ width: 40, height: 40, justifyContent: "center", alignItems: "flex-start" }}>
-            <Icon name="mic" color={colors.ink} size={24} />
-          </Pressable>
-        </View>
-
-        {/* Middle: Logo */}
-        <View style={{ alignItems: "center" }}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
-            <Text style={styles.wordmark}>azadi</Text>
-            <View style={styles.signalDot} />
-          </View>
-          <Text style={styles.kicker}>THE DISPATCH WALL</Text>
-        </View>
-
-        {/* Right Side: Search and Notifications and Menu */}
-        <View style={{ flex: 1, flexDirection: "row", gap: 16, alignItems: "center", justifyContent: "flex-end" }}>
-          <Pressable onPress={() => router.push("/(reporter)/search")}>
-            <Icon name="search-outline" color={colors.ink} size={24} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/(reporter)/notifications")}>
-            <Icon name="notifications-outline" color={colors.ink} size={24} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/settings")}>
-            <Icon name="menu-outline" color={colors.ink} size={28} />
-          </Pressable>
-        </View>
-      </View>
+      <AppHeader
+        routePrefix="/(reporter)"
+        showMenu={true}
+        onLeftPress={() => router.push("/(reporter)/studio")}
+      />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -195,17 +167,42 @@ const createStyles = (colors: any) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
   scroll: { paddingBottom: 40 },
   topHeader: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    minHeight: 52,
   },
-  wordmark: { color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
-  signalDot: { width: 6, height: 6, borderRadius: 8, backgroundColor: colors.red, marginLeft: 4, marginTop: 6 },
-  kicker: { fontSize: 9, letterSpacing: 2, color: colors.muted, marginTop: 4, fontWeight: "800" },
+  headerSideLeft: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  headerSideRight: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  headerBtn: {
+    padding: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wordmark: { color: colors.ink, fontSize: 20, fontWeight: "800", letterSpacing: -0.5 },
+  signalDot: { width: 5, height: 5, borderRadius: 5, backgroundColor: colors.red, marginLeft: 3, marginTop: 5 },
+  kicker: { fontSize: 8, letterSpacing: 1.2, color: colors.muted, marginTop: 2, fontWeight: "800" },
   username: {
     fontSize: 20,
     fontWeight: "700",

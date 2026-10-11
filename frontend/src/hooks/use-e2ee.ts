@@ -5,6 +5,7 @@ import { useAuth } from '../auth';
 
 export function useE2EE() {
   const [isReady, setIsReady] = useState(false);
+  const [hasE2EE, setHasE2EE] = useState(false);
   const [publicKeysCache, setPublicKeysCache] = useState<Record<string, string>>({});
   const { user } = useAuth();
 
@@ -23,9 +24,12 @@ export function useE2EE() {
             await apiPost('/e2ee/keys', { public_key: pubKey });
           }
         }
-        setIsReady(true);
+        setHasE2EE(true);
       } catch (err) {
-        console.error("Failed to init E2EE keys:", err);
+        console.warn("E2EE SubtleCrypto not available on this platform, falling back to server encryption:", err);
+        setHasE2EE(false);
+      } finally {
+        setIsReady(true);
       }
     }
     initKeys();
@@ -35,7 +39,7 @@ export function useE2EE() {
     let recipientKey = publicKeysCache[recipientId];
     if (!recipientKey) {
       // Fetch from server
-      const res = await apiGet(`/e2ee/keys/${recipientId}`);
+      const res = await apiGet<any>(`/e2ee/keys/${recipientId}`);
       if (res && res.public_key) {
         recipientKey = res.public_key;
         setPublicKeysCache(prev => ({ ...prev, [recipientId]: recipientKey }));
@@ -52,5 +56,5 @@ export function useE2EE() {
     return await E2ECrypto.decryptMessage(ciphertext, user.id);
   }, [user?.id]);
 
-  return { isReady, encrypt, decrypt };
+  return { isReady, hasE2EE, encrypt, decrypt };
 }

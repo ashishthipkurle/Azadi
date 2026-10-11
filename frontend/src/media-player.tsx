@@ -17,6 +17,7 @@ export type MediaAttachment = {
   kind: string;
   playback_id?: string;
   url?: string;
+  asset_id?: string;
 };
 
 const muxImage = (id: string) => `https://image.mux.com/${id}/thumbnail.jpg?width=800&fit_mode=preserve`;
@@ -47,6 +48,8 @@ export function MediaPlayer({ media, radius = 8, fill = false }: { media: MediaA
 }
 
 function VideoTile({ playbackId, radius, fill }: { playbackId: string; radius: number; fill?: boolean }) {
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const player = useVideoPlayer(muxStream(playbackId), (p) => {
     p.loop = false;
     p.muted = true;

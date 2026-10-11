@@ -39,6 +39,7 @@ import { C } from "@/src/theme";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast } from "@/src/ui";
 import { RichEditor, type RichEditorRef } from "@/src/rich-editor";
+import { AppHeader } from "@/src/shared/app-header";
 
 type MyPost = {
   id: string;
@@ -48,6 +49,7 @@ type MyPost = {
   created_at: string;
   verified: boolean;
   media?: MediaAttachment[];
+  scheduled_at?: string;
 };
 
 type Earnings = {
@@ -81,7 +83,7 @@ export default function Studio() {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const { user, logout } = useAuth();
-  const [mode, setMode] = useState<"story" | "live" | "earnings" | "analytics">("story");
+  const [mode, setMode] = useState<"story" | "live" | "reel" | "earnings" | "analytics">("story");
   const [analytics, setAnalytics] = useState<any>(null);
   const [title, setTitle] = useState("");
   const [editorHtml, setEditorHtml] = useState("");
@@ -95,7 +97,10 @@ export default function Studio() {
   const [kind, setKind] = useState<"field report" | "photo essay" | "dispatch" | "article">("dispatch");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [connection, setConnection] = useState<LiveConnection | null>(null);
-  const [sessionMeta, setSessionMeta] = useState<{ room: string } | null>(null);
+  const [sessionMeta, setSessionMeta] = useState<{ room: string; session_id: string } | null>(null);
+  const [reelTitle, setReelTitle] = useState("");
+  const [reelUploading, setReelUploading] = useState(false);
+  const [reelProgress, setReelProgress] = useState<"idle" | "uploading" | "processing" | "ready">("idle");
   const [localVideoTrack, setLocalVideoTrack] = useState<any>(null);
   const [posts, setPosts] = useState<MyPost[]>([]);
   const [earnings, setEarnings] = useState<Earnings | null>(null);
@@ -115,7 +120,7 @@ export default function Studio() {
           const newBlocks: Block[] = [{ id: "1", type: "text", content: data.body }];
           if (data.media) {
             data.media.forEach((m, i) => {
-              newBlocks.push({ id: `m${i}`, type: m.kind, playback_id: m.playback_id, status: "ready" });
+              newBlocks.push({ id: `m${i}`, type: m.kind === "video" ? "video" : "image", playback_id: m.playback_id, status: "ready" });
             });
           }
           setBlocks(newBlocks);
@@ -265,7 +270,7 @@ export default function Studio() {
           const fallbackRes = await fetch(file.uri);
           fallbackText = await fallbackRes.text();
         } else {
-          fallbackText = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.UTF8 });
+          fallbackText = await FileSystem.readAsStringAsync(file.uri, { encoding: "utf8" as any });
         }
         if (fallbackText) {
           const safeContent = fallbackText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -432,12 +437,12 @@ export default function Studio() {
   const goLive = async () => {
     setBusy(true);
     try {
-      const res = await apiPost<{ token: string; url: string; room: string }>("/live/token", {
+      const res = await apiPost<{ token: string; url: string; room: string; session_id: string }>("/live/token", {
         title: title.trim() || "Live from the field",
       });
       const conn = await publishLive({ url: res.url, token: res.token });
       setConnection(conn);
-      setSessionMeta({ room: res.room });
+      setSessionMeta({ room: res.room, session_id: res.session_id });
       // Grab the local video track once it's published so we can preview it.
       const attach = () => {
         const pub = conn.room.localParticipant.getTrackPublication?.((globalThis as any).LKKind?.Video || "video");
@@ -469,11 +474,71 @@ export default function Studio() {
     } catch {
       /* ignore */
     }
+    // Notify the backend so the session is marked as ended
+    if (sessionMeta?.session_id) {
+      try {
+        await apiPost(`/live/${sessionMeta.session_id}/end`, {});
+      } catch {
+        /* best-effort — session will expire on its own */
+      }
+    }
     setConnection(null);
     setLocalVideoTrack(null);
     setSessionMeta(null);
     setToast({ message: "Broadcast ended.", tone: "info" });
     disconnectingRef.current = false;
+  };
+
+  const pickAndUploadReel = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      if (!perm.canAskAgain) {
+        setToast({ message: "Enable photo access in Settings to upload videos.", tone: "error" });
+        Linking.openSettings();
+      } else {
+        setToast({ message: "Photo access is needed to upload videos.", tone: "info" });
+      }
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const cleanVideoUri = await stripVideoMetadata(asset.uri);
+    setReelUploading(true);
+    setReelProgress("uploading");
+    try {
+      const media = await uploadToMux(
+        {
+          uri: cleanVideoUri,
+          fileName: asset.fileName || undefined,
+          mimeType: asset.mimeType || undefined,
+        },
+        (phase) => setReelProgress(phase),
+      );
+      // Publish as a "video" kind post so it appears in the Reels feed
+      const videoTitle = reelTitle.trim() || "Video Report";
+      await apiPost("/posts", {
+        title: videoTitle,
+        body: videoTitle,
+        kind: "video",
+        location,
+        media: [{ kind: "video", playback_id: media.playback_id }],
+        blocks: [],
+      });
+      setReelTitle("");
+      setReelProgress("idle");
+      setToast({ message: "Video reel published! Readers can see it in the Reels tab.", tone: "success" });
+      await loadPosts();
+    } catch (e) {
+      setReelProgress("idle");
+      const message = e instanceof ApiError ? e.message : "Video upload failed.";
+      setToast({ message, tone: e instanceof ApiError && e.status === 503 ? "info" : "error" });
+    } finally {
+      setReelUploading(false);
+    }
   };
 
   const deletePost = async (id: string) => {
@@ -488,41 +553,18 @@ export default function Studio() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        {/* Left Side: Back button */}
-        <View style={{ flex: 1, alignItems: "flex-start" }}>
-          <Pressable onPress={() => {
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace("/(reader)/(tabs)");
-            }
-          }} style={{ padding: 8, marginLeft: -8 }}>
-            <Icon name="chevron-back" color={colors.ink} size={24} />
-          </Pressable>
-        </View>
-
-        {/* Middle: Logo */}
-        <View style={{ alignItems: "center" }}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
-            <Text style={styles.wordmark}>azadi</Text>
-            <View style={styles.signalDot} />
-          </View>
-          <Text style={styles.kicker}>REPORTER STUDIO</Text>
-        </View>
-
-        {/* Right Side: Search and Notifications */}
-        <View style={{ flex: 1, flexDirection: "row", gap: 16, alignItems: "center", justifyContent: "flex-end" }}>
-          <Pressable onPress={() => router.push("/(reader)/search")}>
-            <Icon name="search-outline" color={colors.ink} size={24} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/(reader)/notifications")}>
-            <View>
-              <Icon name="notifications-outline" color={colors.ink} size={24} />
-            </View>
-          </Pressable>
-        </View>
-      </View>
+      <AppHeader
+        routePrefix="/(reporter)"
+        subtitle="REPORTER STUDIO"
+        showBack={true}
+        onLeftPress={() => {
+          if (router.canGoBack()) {
+            router.back();
+          } else {
+            router.replace("/(reader)/(tabs)");
+          }
+        }}
+      />
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView
@@ -547,24 +589,46 @@ export default function Studio() {
             </Text>
           </View>
 
-          <View style={styles.segment}>
-            {(["story", "live", "earnings", "analytics"] as const).map((m) => (
-              <Pressable
-                key={m}
-                testID={`reporter-mode-${m}`}
-                onPress={() => {
-                  setMode(m);
-                  if (m === "earnings") loadEarnings();
-                  if (m === "analytics") loadAnalytics();
-    loadAnalytics();
-                }}
-                style={[styles.segmentItem, mode === m && styles.segmentActive]}
-              >
-                <Text style={[styles.segmentText, mode === m && styles.segmentTextActive]}>
-                  {m === "story" ? "Write" : m === "live" ? "Go live" : m === "earnings" ? "Earnings" : "Analytics"}
-                </Text>
-              </Pressable>
-            ))}
+          <View style={styles.segmentWrapper}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.segmentScroll}
+            >
+              {([
+                { key: "story", label: "Write", icon: "create-outline" },
+                { key: "reel", label: "Reel", icon: "videocam-outline" },
+                { key: "live", label: "Go live", icon: "radio-outline" },
+                { key: "earnings", label: "Earnings", icon: "wallet-outline" },
+                { key: "analytics", label: "Analytics", icon: "bar-chart-outline" },
+              ] as const).map((item) => {
+                const active = mode === item.key;
+                return (
+                  <Pressable
+                    key={item.key}
+                    testID={`reporter-mode-${item.key}`}
+                    onPress={() => {
+                      setMode(item.key as any);
+                      if (item.key === "earnings") loadEarnings();
+                      if (item.key === "analytics") loadAnalytics();
+                    }}
+                    style={[styles.segmentPill, active && styles.segmentPillActive]}
+                  >
+                    <Icon
+                      name={item.icon}
+                      size={16}
+                      color={active ? colors.ink : colors.muted}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.segmentPillText, active && styles.segmentPillTextActive]}
+                    >
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
 
           {mode === "story" ? (
@@ -647,7 +711,7 @@ export default function Studio() {
 
               
               <Text style={[styles.overline, { marginTop: 24, marginBottom: 8 }]}>SCHEDULE</Text>
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 24 }}>
+              <View style={[styles.kindRow, { marginBottom: 24 }]}>
                 {[0, 2, 12, 24].map((h) => (
                   <Pressable
                     key={h}
@@ -681,12 +745,11 @@ export default function Studio() {
 
                       <Text style={styles.postRowTitle} numberOfLines={2}>{p.title}</Text>
                       {(() => {
-                        let mediaArr = p.media;
+                        let mediaArr: any = p.media;
                         if (typeof mediaArr === "string") {
                           try { mediaArr = JSON.parse(mediaArr); } catch { mediaArr = []; }
                         }
-                        const isArray = Array.isArray(mediaArr) && mediaArr.length > 0;
-                        if (!isArray) return null;
+                        if (!Array.isArray(mediaArr) || mediaArr.length === 0) return null;
                         return (
                           <View style={{ marginTop: 10, gap: 8 }}>
                             {mediaArr.map((m: any, idx: number) => (
@@ -707,6 +770,51 @@ export default function Studio() {
                   </View>
                 ))
               )}
+            </>
+          ) : mode === "reel" ? (
+            <>
+              <Text style={styles.title}>Upload a Video Reel</Text>
+              <Text style={styles.helperText}>
+                Record a video in the field and upload it here. Readers will see it in the Reels tab as a full-screen video.
+              </Text>
+
+              <View style={styles.cameraPlaceholder}>
+                <Icon name="videocam" color={colors.surface} size={48} />
+                <Text style={styles.previewText}>
+                  {reelProgress === "uploading" ? "Uploading video..." : reelProgress === "processing" ? "Processing on server..." : "Select a video from your gallery"}
+                </Text>
+                {reelProgress !== "idle" && (
+                  <View style={{ marginTop: 12, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: reelProgress === "uploading" ? C.amber : reelProgress === "processing" ? C.blue : C.green }} />
+                    <Text style={styles.previewSub}>{reelProgress.charAt(0).toUpperCase() + reelProgress.slice(1)}</Text>
+                  </View>
+                )}
+              </View>
+
+              <TextInput
+                testID="reporter-reel-title"
+                value={reelTitle}
+                onChangeText={setReelTitle}
+                placeholder="Give your reel a title (optional)"
+                placeholderTextColor="#8A8F91"
+                style={styles.inputTitle}
+              />
+
+              <Button
+                testID="reporter-upload-reel-button"
+                onPress={pickAndUploadReel}
+                tone="red"
+                loading={reelUploading}
+              >
+                {reelUploading ? (reelProgress === "uploading" ? "Uploading..." : "Processing...") : "Select & Upload Video"}
+              </Button>
+
+              <View style={styles.notice}>
+                <Icon name="information-circle-outline" color={C.blue} size={17} />
+                <Text style={styles.noticeText}>
+                  Videos are uploaded via Mux and will appear in the Reels/Video tab for all readers. Short, vertical videos work best for the reel format.
+                </Text>
+              </View>
             </>
           ) : mode === "live" ? (
             <>
@@ -748,13 +856,13 @@ export default function Studio() {
                   <View style={styles.notice}>
                     <Icon name="shield-checkmark-outline" color={C.blue} size={17} />
                     <Text style={styles.noticeText}>
-                      Broadcasting uses WebRTcolors. In the web preview it publishes from your browser. On a phone you'll need a dev build (Publish → Generate build) for native WebRTcolors.
+                      Broadcasting uses WebRTC. In the web preview it publishes from your browser. On a phone you'll need a dev build for native WebRTC.
                     </Text>
                   </View>
                 </>
               )}
             </>
-          ) : (
+          ) : mode === "earnings" ? (
             <>
               <Text style={styles.title}>Your support wall.</Text>
               <View style={styles.earningsGrid}>
@@ -793,6 +901,45 @@ export default function Studio() {
                 </Text>
               </View>
             </>
+          ) : (
+            <>
+              <Text style={styles.title}>Your performance.</Text>
+              <View style={styles.earningsGrid}>
+                <EarningTile label="READS" value={analytics?.total_reads ?? posts.reduce((acc, p: any) => acc + (p.reads || 0), 0)} tone={C.red} />
+                <EarningTile label="FOLLOWERS" value={analytics?.total_followers ?? 0} />
+                <EarningTile label="DISPATCHES" value={analytics?.total_posts ?? posts.length} />
+                <EarningTile label="STATUS" value={user?.verified ? "Verified" : "Pending"} tone={user?.verified ? C.green : C.amber} />
+              </View>
+
+              <Text style={[styles.overline, { marginTop: 22, marginBottom: 10 }]}>TOP DISPATCHES</Text>
+              {posts.length > 0 ? (
+                posts.slice(0, 5).map((p, idx) => (
+                  <View key={p.id} style={styles.supporterRow}>
+                    <View style={styles.supporterRank}>
+                      <Text style={styles.supporterRankText}>{idx + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.supporterName} numberOfLines={1}>{p.title}</Text>
+                      <Text style={styles.postRowMeta}>{p.kind.toUpperCase()} · {new Date(p.created_at).toLocaleDateString()}</Text>
+                    </View>
+                    <Text style={styles.supporterTotal}>{(p as any).reads ?? 0} reads</Text>
+                  </View>
+                ))
+              ) : (
+                <EmptyState
+                  title="No dispatches yet."
+                  body="Publish dispatches from the field to see readership analytics, views, and reach."
+                  icon="bar-chart-outline"
+                />
+              )}
+
+              <View style={styles.notice}>
+                <Icon name="information-circle-outline" color={C.blue} size={17} />
+                <Text style={styles.noticeText}>
+                  Reader analytics track engagement, reading time, and dispatch reach in real-time.
+                </Text>
+              </View>
+            </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -816,31 +963,80 @@ function EarningTile({ label, value, tone }: { label: string; value: number | st
 const createStyles = (colors: any) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
   header: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    minHeight: 52,
   },
-  wordmark: { color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
-  signalDot: { width: 6, height: 6, borderRadius: 8, backgroundColor: C.red, marginLeft: 4, marginTop: 6 },
-  kicker: { fontSize: 9, letterSpacing: 2, color: colors.muted, marginTop: 4, fontWeight: "800" },
+  headerSideLeft: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  headerSideRight: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  headerBtn: {
+    padding: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wordmark: { color: colors.ink, fontSize: 20, fontWeight: "800", letterSpacing: -0.5 },
+  signalDot: { width: 5, height: 5, borderRadius: 5, backgroundColor: C.red, marginLeft: 3, marginTop: 5 },
+  kicker: { fontSize: 8, letterSpacing: 1.2, color: colors.muted, marginTop: 2, fontWeight: "800" },
   avatar: { backgroundColor: colors.ink, borderRadius: 20, width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  content: { padding: 20, paddingBottom: 60 },
-  statusLine: { flexDirection: "row", alignItems: "center", gap: 8, paddingBottom: 20 },
+  content: { padding: 16, paddingBottom: 60 },
+  statusLine: { flexDirection: "row", alignItems: "center", gap: 8, paddingBottom: 16, flexWrap: "wrap" },
   dot: { width: 8, height: 8, borderRadius: 8 },
   statusText: { flex: 1, color: colors.muted, fontSize: 13, fontWeight: "700" },
+  segmentWrapper: { marginBottom: 20 },
+  segmentScroll: { flexDirection: "row", gap: 8, paddingVertical: 2, paddingHorizontal: 2 },
+  segmentPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    backgroundColor: colors.line,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  segmentPillActive: {
+    backgroundColor: colors.surface,
+    borderColor: colors.ink,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentPillText: { color: colors.muted, fontWeight: "700", fontSize: 13 },
+  segmentPillTextActive: { color: colors.ink, fontWeight: "800" },
   segment: { flexDirection: "row", backgroundColor: colors.line, padding: 3, borderRadius: 8, marginBottom: 24 },
   segmentItem: { flex: 1, alignItems: "center", paddingVertical: 11, borderRadius: 8 },
   segmentActive: { backgroundColor: colors.surface },
   segmentText: { color: colors.muted, fontWeight: "800", fontSize: 13 },
   segmentTextActive: { color: colors.ink },
-  title: { color: colors.ink, fontSize: 30, fontWeight: "800", letterSpacing: -1, marginBottom: 16 },
+  title: { color: colors.ink, fontSize: 26, fontWeight: "800", letterSpacing: -0.5, marginBottom: 14 },
   inputTitle: {
     color: colors.ink,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -876,6 +1072,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   formatToolbar: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 8,

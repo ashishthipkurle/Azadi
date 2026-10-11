@@ -29,6 +29,7 @@ import { sharePost } from "@/src/share";
 import {   } from "@/src/theme";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast } from "@/src/ui";
+import { AppHeader } from "@/src/shared/app-header";
 
 type Post = {
   id: string;
@@ -254,37 +255,13 @@ export default function Feed() {
   const filtered = sourcePosts;
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        {/* Left Side: Create Button */}
-        <View style={{ flex: 1, alignItems: "flex-start" }}>
-          <Pressable onPress={() => router.push("/(reporter)/studio")} style={{ width: 40, height: 40, justifyContent: "center", alignItems: "flex-start" }}>
-            <Icon name="mic" color={colors.ink} size={24} />
-          </Pressable>
-        </View>
-
-        {/* Middle: Logo */}
-        <View style={{ alignItems: "center" }}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
-            <Text style={styles.wordmark}>azadi</Text>
-            <View style={styles.signalDot} />
-          </View>
-          <Text style={styles.kicker}>THE DISPATCH WALL</Text>
-        </View>
-
-        {/* Right Side: Search and Notifications */}
-        <View style={{ flex: 1, flexDirection: "row", gap: 16, alignItems: "center", justifyContent: "flex-end" }}>
-          <Pressable onPress={() => router.push("/(reporter)/search")}>
-            <Icon name="search-outline" color={colors.ink} size={24} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/(reporter)/notifications")}>
-            <View>
-              <Icon name="notifications-outline" color={colors.ink} size={24} />
-              {hasUnread && <View style={{ position: 'absolute', top: -2, right: -2, width: 10, height: 10, borderRadius: 8, backgroundColor: colors.red, borderWidth: 2, borderColor: colors.paper }} />}
-            </View>
-          </Pressable>
-        </View>
-      </View>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      <AppHeader
+        routePrefix="/(reporter)"
+        subtitle="THE DISPATCH WALL"
+        hasUnread={hasUnread}
+        onLeftPress={() => router.push("/(reporter)/studio")}
+      />
 
       {loading ? (
         <View style={styles.center}>
@@ -616,17 +593,42 @@ const createStyles = (colors: any) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    minHeight: 52,
   },
-  wordmark: { color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -1 },
-  signalDot: { width: 6, height: 6, borderRadius: 8, backgroundColor: colors.red, marginLeft: 4, marginTop: 6 },
-  kicker: { fontSize: 9, letterSpacing: 2, color: colors.muted, marginTop: 4, fontWeight: "800" },
+  headerSideLeft: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  headerSideRight: {
+    minWidth: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  headerBtn: {
+    padding: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wordmark: { color: colors.ink, fontSize: 20, fontWeight: "800", letterSpacing: -0.5 },
+  signalDot: { width: 5, height: 5, borderRadius: 5, backgroundColor: colors.red, marginLeft: 3, marginTop: 5 },
+  kicker: { fontSize: 8, letterSpacing: 1.2, color: colors.muted, marginTop: 2, fontWeight: "800" },
   content: { padding: 20, paddingBottom: 60 },
   hello: { color: colors.muted, fontSize: 13, fontWeight: "700" },
   headline: { color: colors.ink, fontSize: 32, fontWeight: "800", letterSpacing: -1, marginTop: 4, marginBottom: 16 },

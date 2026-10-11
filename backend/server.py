@@ -12,7 +12,7 @@ import httpx
 import jwt
 import razorpay
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from livekit import api as livekit_api
 from pydantic import BaseModel, Field
@@ -724,8 +724,7 @@ async def delete_post(post_id: str, user: dict = Depends(current_user)):
 @api_router.post("/storage/upload-url")
 async def create_storage_upload(payload: UploadCreate, user: dict = Depends(current_user)):
     """Generate a presigned URL to upload a file directly to Supabase Storage."""
-    from backend.database import get_client
-    supabase = get_client()
+    supabase = db.get_client()
     bucket = "media"
     
     # Generate unique key for the file
@@ -758,6 +757,48 @@ async def create_storage_upload(payload: UploadCreate, user: dict = Depends(curr
         "upload_url": upload_url,
         "key": key,
         "public_url": public_url
+    }
+
+@api_router.post("/storage/upload")
+async def upload_storage_file(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Direct multipart file upload to Supabase Storage."""
+    supabase = db.get_client()
+    bucket = "media"
+    
+    ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "jpg"
+    key = f"uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    
+    try:
+        buckets = supabase.storage.list_buckets()
+        if bucket not in [b.name for b in buckets]:
+            supabase.storage.create_bucket(bucket, options={'public': True})
+    except Exception:
+        pass
+        
+    contents = await file.read()
+    content_type = file.content_type or "application/octet-stream"
+    
+    try:
+        supabase.storage.from_(bucket).upload(
+            path=key,
+            file=contents,
+            file_options={"content-type": content_type}
+        )
+    except Exception:
+        try:
+            supabase.storage.from_(bucket).upload(
+                path=key,
+                file=contents,
+                file_options={"content-type": content_type, "upsert": "true"}
+            )
+        except Exception as e:
+            raise HTTPException(500, f"Upload error: {str(e)}")
+            
+    public_url = supabase.storage.from_(bucket).get_public_url(key)
+    return {
+        "url": public_url,
+        "public_url": public_url,
+        "key": key
     }
 
 @api_router.post("/media/upload-url")
@@ -848,8 +889,9 @@ async def live_token(payload: LiveCreate, user: dict = Depends(require_roles("re
         .with_name(user["name"])
         .with_grants(livekit_api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True))
     )
+    session_id = str(uuid.uuid4())
     await db.insert_one("live_sessions", {
-        "id": str(uuid.uuid4()),
+        "id": session_id,
         "room": room_name,
         "reporter_id": user["id"],
         "reporter_name": user["name"],
@@ -857,7 +899,7 @@ async def live_token(payload: LiveCreate, user: dict = Depends(require_roles("re
         "status": "live",
         "started_at": now(),
     })
-    return {"token": token.to_jwt(), "url": os.environ["LIVEKIT_URL"], "room": room_name}
+    return {"token": token.to_jwt(), "url": os.environ["LIVEKIT_URL"], "room": room_name, "session_id": session_id}
 
 
 @api_router.get("/live/sessions")

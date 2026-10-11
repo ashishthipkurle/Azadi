@@ -1,10 +1,14 @@
 import { Tabs } from "expo-router";
 import { Platform } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 
 export default function ReaderTabsLayout() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, Platform.OS === "ios" ? 18 : 6);
+  const tabHeight = 52 + bottomPadding;
 
   return (
     <Tabs
@@ -14,19 +18,21 @@ export default function ReaderTabsLayout() {
           backgroundColor: colors.surface,
           borderTopColor: colors.line,
           borderTopWidth: 1,
-          borderTopLeftRadius: 8,
-          borderTopRightRadius: 8,
-          paddingTop: 8,
-          paddingBottom: Platform.OS === "ios" ? 28 : 8,
-          minHeight: Platform.OS === "ios" ? 85 : 65,
+          paddingTop: 5,
+          paddingBottom: bottomPadding,
+          height: tabHeight,
+        },
+        tabBarItemStyle: {
+          paddingVertical: 0,
+          justifyContent: "center",
         },
         tabBarActiveTintColor: colors.ink,
         tabBarInactiveTintColor: colors.muted,
         tabBarLabelStyle: {
           fontSize: 10,
-          fontWeight: "800",
-          marginTop: 4,
-          marginBottom: Platform.OS === "ios" ? 0 : 4,
+          fontWeight: "700",
+          marginTop: 2,
+          marginBottom: 0,
         },
       }}
     >

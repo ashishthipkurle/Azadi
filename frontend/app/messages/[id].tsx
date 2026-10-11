@@ -1,10 +1,22 @@
 import { useLocalSearchParams, useRouter, Redirect } from "expo-router";
 import { useCallback, useEffect, useState, useRef } from "react";
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 
-import { apiGet, apiPost } from "@/src/api";
+import { API, TOKEN_KEY, apiGet, apiPost } from "@/src/api";
+import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { useE2EE } from "@/src/hooks/use-e2ee";
@@ -19,49 +31,67 @@ type Message = {
   sender_id: string;
   receiver_id: string;
   body: string;
-  encrypted?: boolean;
+  encrypted: boolean;
   read: boolean;
   created_at: string;
 };
 
 // Component to handle offline media caching and encrypted media decryption
-function CachedImage({ url, style, contentFit, mediaKey }: { url: string; style: any; contentFit: string; mediaKey?: string }) {
+function CachedImage({
+  url,
+  style,
+  contentFit,
+  mediaKey,
+}: {
+  url: string;
+  style: any;
+  contentFit: string;
+  mediaKey?: string;
+}) {
   const [localUri, setLocalUri] = useState<string | null>(null);
-  
+
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         if (mediaKey) {
           // Encrypted media: download raw bytes, decrypt, write to temp file
+          const cacheDir = (FileSystem as any).cacheDirectory || (FileSystem as any).documentDirectory || "";
           const encryptedB64 = await FileSystem.readAsStringAsync(
             await getCachedMedia(url),
-            { encoding: FileSystem.EncodingType.Base64 }
+            { encoding: "base64" as any }
           ).catch(async () => {
-            // If getCachedMedia returned a URL (not a file), download it first
-            const tmpPath = `${FileSystem.cacheDirectory}enc_${Date.now()}`;
+            const tmpPath = `${cacheDir}enc_${Date.now()}`;
             await FileSystem.downloadAsync(url, tmpPath);
-            return await FileSystem.readAsStringAsync(tmpPath, { encoding: FileSystem.EncodingType.Base64 });
+            return await FileSystem.readAsStringAsync(tmpPath, { encoding: "base64" as any });
           });
-          
+
           const decryptedB64 = await decryptMediaData(encryptedB64, mediaKey);
-          const decPath = `${FileSystem.cacheDirectory}dec_${Date.now()}.jpg`;
-          await FileSystem.writeAsStringAsync(decPath, decryptedB64, { encoding: FileSystem.EncodingType.Base64 });
+          const decPath = `${cacheDir}dec_${Date.now()}.jpg`;
+          await FileSystem.writeAsStringAsync(decPath, decryptedB64, { encoding: "base64" as any });
           if (active) setLocalUri(decPath);
         } else {
-          // Unencrypted media (legacy)
+          // Unencrypted media
           const cached = await getCachedMedia(url);
           if (active) setLocalUri(cached);
         }
       } catch (e) {
         console.error("Media load/decrypt failed:", e);
-        if (active) setLocalUri(url); // fallback to raw URL
+        if (active) setLocalUri(url);
       }
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [url, mediaKey]);
 
-  if (!localUri) return <View style={[style, { backgroundColor: "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }]}><ActivityIndicator size="small" /></View>;
+  if (!localUri) {
+    return (
+      <View style={[style, { backgroundColor: "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }]}>
+        <ActivityIndicator size="small" />
+      </View>
+    );
+  }
   return <Image source={{ uri: localUri }} style={style} contentFit={contentFit as any} />;
 }
 
@@ -71,15 +101,39 @@ export default function ChatScreen() {
   const styles = createStyles(colors);
   const router = useRouter();
   const { user, ready } = useAuth();
-  const { encrypt, decrypt, isReady } = useE2EE();
-  
+  const { encrypt, decrypt, isReady, hasE2EE } = useE2EE();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [decryptedMessages, setDecryptedMessages] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [otherUser, setOtherUser] = useState<{ name: string; avatar_url?: string } | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
   const flatListRef = useRef<FlatList>(null);
+
+  // Monitor keyboard display to ensure input is never obscured on Android
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }, 50);
+    });
+
+    const hideSub = Keyboard.addListener(hideEvt, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   if (ready && !user) {
     return <Redirect href="/" />;
@@ -90,22 +144,25 @@ export default function ChatScreen() {
       if (!user) return;
       const [data, uData] = await Promise.all([
         apiGet<Message[]>(`/messages/${otherId}`),
-        apiGet<{ name: string; avatar_url?: string }>(`/users/${otherId}/basic`).catch(() => null)
+        apiGet<{ name: string; avatar_url?: string }>(`/users/${otherId}/basic`).catch(() => null),
       ]);
-      
+
       // Save pulled messages to SQLite local DB
-      saveLocalMessages(data, user.id).catch(console.error);
-      
-      setMessages(prev => {
-        const dataIds = new Set(data.map(m => m.id));
-        const missingLocals = prev.filter(m => !dataIds.has(m.id));
+      saveLocalMessages(
+        data.map((m) => ({ ...m, encrypted: Boolean(m.encrypted) })),
+        user.id
+      ).catch(console.error);
+
+      setMessages((prev) => {
+        const dataIds = new Set(data.map((m) => m.id));
+        const missingLocals = prev.filter((m) => !dataIds.has(m.id));
         const merged = [...data, ...missingLocals];
         merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         return merged;
       });
       if (uData) setOtherUser(uData);
     } catch {
-      // On failure, offline mode already loaded the local DB below!
+      // Offline mode fallback handled by SQLite
     } finally {
       setLoading(false);
     }
@@ -114,63 +171,58 @@ export default function ChatScreen() {
   useEffect(() => {
     // 1. Instantly load messages from SQLite cache on mount
     if (user) {
-      getLocalMessages(otherId).then(local => {
-        if (local.length > 0) {
-          setMessages(local.reverse()); // SQLite returns DESC, we want ASC
-        }
-      }).catch(console.error);
+      getLocalMessages(otherId)
+        .then((local) => {
+          if (local.length > 0) {
+            setMessages(local.reverse());
+          }
+        })
+        .catch(console.error);
     }
-    
+
     // 2. Poll server for updates
     load();
-    const interval = setInterval(load, 2000);
+    const interval = setInterval(load, 2500);
     return () => clearInterval(interval);
   }, [load, otherId, user]);
 
   // Handle decryption
   useEffect(() => {
-    if (!isReady || !user?.id) return;
+    if (!user?.id) return;
     messages.forEach(async (msg) => {
       if (msg.encrypted && !decryptedMessages[msg.id]) {
         try {
           let pt = "";
           try {
-            // Attempt to parse dual-encrypted payload
             const parsed = JSON.parse(msg.body);
             if (parsed.r && parsed.s) {
-              if (msg.sender_id === user.id) {
-                pt = await decrypt(parsed.s);
-              } else {
-                pt = await decrypt(parsed.r);
-              }
+              const cipher = msg.sender_id === user.id ? parsed.s : parsed.r;
+              pt = await decrypt(cipher);
             } else {
-              pt = await decrypt(msg.body); // fallback
+              pt = await decrypt(msg.body);
             }
-          } catch (e) {
-            // Not JSON, fallback to legacy
+          } catch {
             if (msg.sender_id === user.id) {
-              // Legacy messages were only encrypted for the recipient.
-              // Sender cannot decrypt them.
-              setDecryptedMessages(prev => ({ ...prev, [msg.id]: "🔒 Sent Securely" }));
+              setDecryptedMessages((prev) => ({ ...prev, [msg.id]: "🔒 Sent Securely" }));
               return;
             } else {
               pt = await decrypt(msg.body);
             }
           }
-          setDecryptedMessages(prev => ({ ...prev, [msg.id]: pt }));
-        } catch (err) {
-          console.error("Failed to decrypt msg", msg.id, err);
-          setDecryptedMessages(prev => ({ ...prev, [msg.id]: "🔒 Encrypted Message" }));
+          setDecryptedMessages((prev) => ({ ...prev, [msg.id]: pt }));
+        } catch {
+          // If local decrypt fails (e.g. key mismatch), show message as is or generic label
+          setDecryptedMessages((prev) => ({ ...prev, [msg.id]: msg.body || "🔒 Message" }));
         }
       }
     });
-  }, [messages, isReady, decrypt, decryptedMessages, user?.id]);
+  }, [messages, decrypt, decryptedMessages, user?.id]);
 
   const sendMessage = async (textMessage: string) => {
     const text = textMessage.trim();
-    if (text.length === 0 || !isReady || !user?.id) return;
+    if (text.length === 0 || !user?.id) return;
     setSending(true);
-    
+
     // 1. Optimistic update (instantaneous UI response)
     const tempId = "temp-" + Date.now();
     const tempMsg: Message = {
@@ -178,121 +230,177 @@ export default function ChatScreen() {
       sender_id: user.id,
       receiver_id: otherId,
       body: text,
-      encrypted: true, // Optimistically assume success
+      encrypted: hasE2EE,
       read: false,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
     };
-    
-    setDecryptedMessages(prev => ({ ...prev, [tempId]: text }));
+
+    setDecryptedMessages((prev) => ({ ...prev, [tempId]: text }));
     setMessages((prev) => [...prev, tempMsg]);
-    
-    // 2. Encrypt asynchronously
+
+    // 2. Encrypt if E2EE is available, otherwise send directly (backend encrypts at rest)
     let ciphertext = text;
     let encrypted = false;
-    try {
-      const cipherForRecipient = await encrypt(text, otherId);
-      const cipherForSender = await encrypt(text, user.id);
-      ciphertext = JSON.stringify({ r: cipherForRecipient, s: cipherForSender });
-      encrypted = true;
-    } catch (e) {
-      console.error("Encryption failed details:", e);
-      ciphertext = text;
-      encrypted = false;
+    if (hasE2EE) {
+      try {
+        const cipherForRecipient = await encrypt(text, otherId);
+        const cipherForSender = await encrypt(text, user.id);
+        ciphertext = JSON.stringify({ r: cipherForRecipient, s: cipherForSender });
+        encrypted = true;
+      } catch {
+        ciphertext = text;
+        encrypted = false;
+      }
     }
-    
+
     // 3. Send to backend
     try {
       const msg = await apiPost<Message>(`/messages/${otherId}`, { body: ciphertext, encrypted });
-      if (encrypted) {
-        setDecryptedMessages(prev => ({ ...prev, [msg.id]: text }));
-      }
+      setDecryptedMessages((prev) => ({ ...prev, [msg.id]: text }));
       setMessages((prev) => {
-        const hasTemp = prev.some(m => m.id === tempId);
-        if (hasTemp) return prev.map(m => m.id === tempId ? msg : m);
-        const hasMsg = prev.some(m => m.id === msg.id);
+        const hasTemp = prev.some((m) => m.id === tempId);
+        if (hasTemp) return prev.map((m) => (m.id === tempId ? msg : m));
+        const hasMsg = prev.some((m) => m.id === msg.id);
         if (hasMsg) return prev;
         return [...prev, msg];
       });
-    } catch {
+    } catch (e) {
+      console.error("Message send failed:", e);
       // Rollback on failure
-      setMessages((prev) => prev.filter(m => m.id !== tempId));
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
     } finally {
       setSending(false);
     }
   };
 
   const send = async () => {
-    if (sending) return;
+    if (sending || body.trim().length === 0) return;
     const text = body;
     setBody("");
     await sendMessage(text);
   };
 
   const attachMedia = async () => {
-    if (sending || !isReady) return;
+    if (sending) return;
+
+    // 1. Request media permissions
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      if (!perm.canAskAgain) {
+        alert("Please allow photo & video access in Settings to attach media.");
+      } else {
+        alert("Photo access is needed to attach media to your messages.");
+      }
+      return;
+    }
+
+    // 2. Launch library picker
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.8,
     });
-    
-    if (result.canceled || !result.assets.length) return;
+
+    if (result.canceled || !result.assets?.length) return;
     const asset = result.assets[0];
     setSending(true);
-    
+
     try {
-      // 1. Read file as base64
-      const fileBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      
-      // 2. Generate AES-256 key and encrypt the file
-      const mediaKey = generateMediaKey();
-      const encryptedBase64 = await encryptMediaData(fileBase64, mediaKey);
-      
-      // 3. Write encrypted data to a temp file
-      const encTempPath = `${FileSystem.cacheDirectory}enc_upload_${Date.now()}.bin`;
-      await FileSystem.writeAsStringAsync(encTempPath, encryptedBase64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      
-      // 4. Get presigned upload URL
-      const { upload_url, public_url } = await apiPost<{ upload_url: string; public_url: string }>("/storage/upload-url", {
-        filename: (asset.fileName || "media") + ".enc",
-        content_type: "application/octet-stream"
-      });
-      
-      // 5. Upload the encrypted file (not the original)
-      await FileSystem.uploadAsync(upload_url, encTempPath, {
-        httpMethod: "PUT",
-        headers: { "Content-Type": "application/octet-stream" }
-      });
-      
-      // 6. Clean up temp file
-      await FileSystem.deleteAsync(encTempPath, { idempotent: true });
-      
-      // 7. Send message with URL + AES key embedded (the key is E2E encrypted along with the message)
-      await sendMessage(`[EMEDIA] ${public_url} ${mediaKey}`);
+      const token = await storage.secureGet(TOKEN_KEY, "");
+      let publicUrl: string | null = null;
+      let mediaKey: string | undefined = undefined;
+
+      // Method A: Direct multipart upload
+      try {
+        const formData = new FormData();
+        formData.append("file", {
+          uri: asset.uri,
+          name: asset.fileName || `media_${Date.now()}.jpg`,
+          type: asset.mimeType || "image/jpeg",
+        } as any);
+
+        const uploadRes = await fetch(`${API}/storage/upload`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+
+        if (uploadRes.ok) {
+          const upData = await uploadRes.json();
+          publicUrl = upData.public_url || upData.url;
+        }
+      } catch (errDirect) {
+        console.warn("Direct storage upload failed, attempting presigned fallback:", errDirect);
+      }
+
+      // Method B: Presigned storage upload fallback
+      if (!publicUrl) {
+        const filename = (asset.fileName || `media_${Date.now()}`) + ".jpg";
+        const { upload_url, public_url } = await apiPost<{ upload_url: string; public_url: string }>(
+          "/storage/upload-url",
+          { filename, content_type: asset.mimeType || "image/jpeg" }
+        );
+
+        await FileSystem.uploadAsync(upload_url, asset.uri, {
+          httpMethod: "PUT",
+          headers: { "Content-Type": asset.mimeType || "image/jpeg" },
+        });
+
+        publicUrl = public_url;
+      }
+
+      if (!publicUrl) {
+        throw new Error("Could not obtain a public URL for the uploaded media.");
+      }
+
+      // If E2EE is available, encrypt media key into payload
+      if (hasE2EE) {
+        try {
+          mediaKey = generateMediaKey();
+          await sendMessage(`[EMEDIA] ${publicUrl} ${mediaKey}`);
+          return;
+        } catch {
+          // Fall through to standard media
+        }
+      }
+
+      // Standard media message
+      await sendMessage(`[MEDIA] ${publicUrl}`);
     } catch (e) {
-      console.error("Encrypted media upload failed", e);
+      console.error("Media upload failed:", e);
       alert("Failed to upload media. Please try again.");
     } finally {
       setSending(false);
     }
   };
 
+  const keyboardContainerStyle =
+    Platform.OS === "android"
+      ? { flex: 1, marginBottom: keyboardHeight }
+      : { flex: 1 };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      {/* Header */}
       <View style={[styles.header, { borderBottomWidth: 1, borderBottomColor: colors.line }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/')} hitSlop={12}>
-            <Icon name="chevron-back" color={colors.ink} />
+          <Pressable onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} hitSlop={12}>
+            <Icon name="chevron-back" color={colors.ink} size={22} />
           </Pressable>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             {otherUser?.avatar_url ? (
-              <Image source={{ uri: otherUser.avatar_url }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+              <Image source={{ uri: otherUser.avatar_url }} style={{ width: 34, height: 34, borderRadius: 17 }} />
             ) : (
-              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.line, alignItems: "center", justifyContent: "center" }}>
-                <Icon name="person" color={colors.muted} size={16} />
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 17,
+                  backgroundColor: colors.line,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="person" color={colors.muted} size={18} />
               </View>
             )}
             <Text style={{ fontSize: 18, fontWeight: "800", color: colors.ink }}>
@@ -300,13 +408,24 @@ export default function ChatScreen() {
             </Text>
           </View>
           <View style={{ flex: 1 }} />
-          {isReady && <Icon name="lock-closed" color={colors.muted} size={14} style={{ marginRight: 8 }} />}
+          {hasE2EE && (
+            <View style={{ marginRight: 8 }}>
+              <Icon name="lock-closed" color={colors.muted} size={14} />
+            </View>
+          )}
         </View>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      {/* Main Content & Input with Android + iOS Keyboard Resilience */}
+      <KeyboardAvoidingView
+        style={keyboardContainerStyle}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+      >
         {loading ? (
-          <View style={styles.center}><ActivityIndicator color={colors.red} /></View>
+          <View style={styles.center}>
+            <ActivityIndicator color={colors.red} />
+          </View>
         ) : (
           <FlatList
             ref={flatListRef}
@@ -317,64 +436,72 @@ export default function ChatScreen() {
             renderItem={({ item }) => {
               const isMine = item.sender_id === user?.id;
               const isTemp = item.id.startsWith("temp-");
-              const dec = item.encrypted ? (decryptedMessages[item.id] || "🔒 Decrypting...") : item.body;
-              
-              // Support both new encrypted media [EMEDIA] and legacy unencrypted [MEDIA]
+              const dec = item.encrypted ? decryptedMessages[item.id] || "🔒 Decrypting..." : item.body;
+
               const isEncMedia = dec.startsWith("[EMEDIA] ");
               const isLegacyMedia = dec.startsWith("[MEDIA] ");
               const isMedia = isEncMedia || isLegacyMedia;
               let mediaUrl: string | null = null;
               let mediaKey: string | undefined = undefined;
-              
+
               if (isEncMedia) {
                 const parts = dec.substring(9).split(" ");
                 mediaUrl = parts[0];
-                mediaKey = parts[1]; // AES key was E2E encrypted with the message
+                mediaKey = parts[1];
               } else if (isLegacyMedia) {
                 mediaUrl = dec.substring(8);
               }
-              
+
               return (
-                <View style={{
-                  alignSelf: isMine ? "flex-end" : "flex-start",
-                  backgroundColor: isMine ? colors.ink : colors.surface,
-                  borderWidth: isMine ? 0 : 1,
-                  borderColor: colors.line,
-                  paddingHorizontal: isMedia ? 4 : 16,
-                  paddingVertical: isMedia ? 4 : 12,
-                  borderRadius: 20,
-                  borderBottomRightRadius: isMine ? 4 : 20,
-                  borderBottomLeftRadius: isMine ? 20 : 4,
-                  maxWidth: "80%",
-                  marginBottom: 8,
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: 0.05,
-                  shadowRadius: 2,
-                  elevation: 1,
-                  overflow: "hidden"
-                }}>
+                <View
+                  style={{
+                    alignSelf: isMine ? "flex-end" : "flex-start",
+                    backgroundColor: isMine ? colors.ink : colors.surface,
+                    borderWidth: isMine ? 0 : 1,
+                    borderColor: colors.line,
+                    paddingHorizontal: isMedia ? 4 : 16,
+                    paddingVertical: isMedia ? 4 : 12,
+                    borderRadius: 20,
+                    borderBottomRightRadius: isMine ? 4 : 20,
+                    borderBottomLeftRadius: isMine ? 20 : 4,
+                    maxWidth: "80%",
+                    marginBottom: 8,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 1 },
+                    shadowOpacity: 0.05,
+                    shadowRadius: 2,
+                    elevation: 1,
+                    overflow: "hidden",
+                  }}
+                >
                   {isMedia ? (
-                    <CachedImage 
-                      url={mediaUrl as string} 
+                    <CachedImage
+                      url={mediaUrl as string}
                       style={{ width: 200, height: 200, borderRadius: 16 }}
                       contentFit="cover"
                       mediaKey={mediaKey}
                     />
                   ) : (
-                    <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>
-                      {dec}
-                    </Text>
+                    <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>{dec}</Text>
                   )}
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4, marginRight: isMedia ? 8 : 0, alignSelf: "flex-end" }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                      marginTop: 4,
+                      marginRight: isMedia ? 8 : 0,
+                      alignSelf: "flex-end",
+                    }}
+                  >
                     <Text style={{ color: isMine ? "rgba(255,255,255,0.7)" : colors.muted, fontSize: 10 }}>
-                      {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </Text>
                     {isMine && (
-                      <Icon 
-                        name={isTemp ? "time-outline" : (item.read ? "checkmark-done" : "checkmark")} 
-                        color={isTemp ? "rgba(255,255,255,0.5)" : (item.read ? "#4ADE80" : "rgba(255,255,255,0.7)")} 
-                        size={12} 
+                      <Icon
+                        name={isTemp ? "time-outline" : item.read ? "checkmark-done" : "checkmark"}
+                        color={isTemp ? "rgba(255,255,255,0.5)" : item.read ? "#4ADE80" : "rgba(255,255,255,0.7)"}
+                        size={12}
                       />
                     )}
                   </View>
@@ -383,19 +510,63 @@ export default function ChatScreen() {
             }}
           />
         )}
-        <View style={{ flexDirection: "row", padding: 12, gap: 10, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.surface, alignItems: "flex-end" }}>
+
+        {/* Bottom Input Row */}
+        <View
+          style={{
+            flexDirection: "row",
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            gap: 10,
+            borderTopWidth: 1,
+            borderTopColor: colors.line,
+            backgroundColor: colors.surface,
+            alignItems: "center",
+          }}
+        >
+          {/* Paperclip Media Button */}
           <Pressable
+            testID="chat-attach-button"
             onPress={attachMedia}
-            disabled={sending || !isReady}
-            style={{ width: 48, height: 48, alignItems: "center", justifyContent: "center" }}
+            disabled={sending}
+            hitSlop={8}
+            style={{
+              width: 44,
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: sending ? 0.5 : 1,
+            }}
           >
-            <Icon name="attach" color={colors.muted} size={28} />
+            <Icon name="attach" color={colors.ink} size={26} />
           </Pressable>
-          
-          <View style={{ flex: 1, backgroundColor: colors.paper, borderRadius: 24, minHeight: 48, paddingHorizontal: 16, justifyContent: "center" }}>
+
+          {/* Text Input Pill */}
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: colors.paper,
+              borderRadius: 24,
+              minHeight: 44,
+              paddingHorizontal: 16,
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: colors.line,
+            }}
+          >
             <TextInput
-              style={{ flex: 1, margin: 0, paddingVertical: 12, fontSize: 15, color: colors.ink, outlineStyle: "none" } as any}
-              placeholder="Type a secure message..."
+              testID="chat-input"
+              style={
+                {
+                  flex: 1,
+                  margin: 0,
+                  paddingVertical: 10,
+                  fontSize: 15,
+                  color: colors.ink,
+                  outlineStyle: "none",
+                } as any
+              }
+              placeholder="Type a message..."
               placeholderTextColor={colors.muted}
               value={body}
               onChangeText={setBody}
@@ -403,12 +574,29 @@ export default function ChatScreen() {
               maxLength={1000}
             />
           </View>
+
+          {/* Send Button */}
           <Pressable
+            testID="chat-send-button"
             onPress={send}
-            disabled={body.trim().length === 0 || sending || !isReady}
-            style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: body.trim().length > 0 && isReady ? colors.red : colors.muted, alignItems: "center", justifyContent: "center" }}
+            disabled={body.trim().length === 0 || sending}
+            hitSlop={8}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              backgroundColor: body.trim().length > 0 ? colors.ink : colors.line,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            <Icon name="send" color="#fff" size={20} style={{ marginLeft: 4 }} />
+            {sending ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <View style={{ marginLeft: 3 }}>
+                <Icon name="send" color={body.trim().length > 0 ? "#fff" : colors.muted} size={18} />
+              </View>
+            )}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -416,8 +604,15 @@ export default function ChatScreen() {
   );
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.paper },
-  header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.line },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" }
-});
+const createStyles = (colors: any) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.paper },
+    header: {
+      paddingHorizontal: 16,
+      paddingTop: 12,
+      paddingBottom: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.line,
+    },
+    center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  });

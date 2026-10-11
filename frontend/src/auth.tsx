@@ -14,6 +14,11 @@ export type AuthUser = {
   email: string;
   role: Role;
   verified?: boolean;
+  disabled?: boolean;
+  beat?: string;
+  location?: string;
+  bio?: string;
+  avatar_url?: string;
 };
 
 type AuthState = {

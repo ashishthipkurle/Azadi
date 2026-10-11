@@ -38,7 +38,7 @@ function WebVideoSplash({ onFinish }: { onFinish: () => void }) {
   
   useEffect(() => {
     import("expo-asset").then(async ({ Asset }) => {
-      const asset = await Asset.loadAsync(require("@/assets/videos/opening_animation.mp4"));
+      const asset = await Asset.loadAsync(require("@/assets/videos/opening_animation_2.mp4"));
       setUri(asset[0].localUri || asset[0].uri);
     });
     
@@ -60,6 +60,15 @@ function WebVideoSplash({ onFinish }: { onFinish: () => void }) {
     }}>
       {/* @ts-ignore - React Native Web supports rendering standard DOM elements */}
       <video
+        ref={(el: any) => {
+          if (el) el.playbackRate = 1.5;
+        }}
+        onLoadedMetadata={(e: any) => {
+          if (e?.currentTarget) e.currentTarget.playbackRate = 1.5;
+        }}
+        onPlay={(e: any) => {
+          if (e?.currentTarget) e.currentTarget.playbackRate = 1.5;
+        }}
         src={uri}
         style={{
           width: "100%",
@@ -86,9 +95,10 @@ export default function RootLayout() {
   // --- Native: use the real video splash ---
   const videoReady = useRef(false);
   const player = useVideoPlayer(
-    Platform.OS !== "web" ? require("@/assets/videos/opening_animation.mp4") : null,
+    Platform.OS !== "web" ? require("@/assets/videos/opening_animation_2.mp4") : null,
     player => {
       if (Platform.OS !== "web") {
+        player.playbackRate = 1.5;
         player.play();
       }
     },
@@ -96,6 +106,9 @@ export default function RootLayout() {
 
   // Listen for video playback starting — hide native splash only then
   useEventListener(player, 'statusChange', (ev: any) => {
+    if (player) {
+      player.playbackRate = 1.5;
+    }
     if (!videoReady.current && ev?.status === 'readyToPlay') {
       videoReady.current = true;
       SplashScreen.hideAsync();
