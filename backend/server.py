@@ -1305,6 +1305,30 @@ async def get_user_basic(user_id: str, user: dict = Depends(current_user)):
     return {"name": target["name"], "avatar_url": target.get("avatar_url")}
 
 
+# ─── E2EE Public Key Exchange ────────────────────────────────────────────────
+
+class E2EEKeyCreate(BaseModel):
+    public_key: str
+
+@api_router.post("/e2ee/keys")
+async def upload_e2ee_key(payload: E2EEKeyCreate, user: dict = Depends(current_user)):
+    """Store or update the user's E2EE public key on the users table."""
+    sb = db.get_client()
+    sb.table("users").update({
+        "public_key": payload.public_key,
+        "public_key_updated_at": now(),
+    }).eq("id", user["id"]).execute()
+    return {"ok": True}
+
+@api_router.get("/e2ee/keys/{user_id}")
+async def get_e2ee_key(user_id: str, user: dict = Depends(current_user)):
+    """Retrieve another user's E2EE public key for encryption."""
+    target = await db.find_one("users", {"id": user_id})
+    if not target or not target.get("public_key"):
+        raise HTTPException(404, "User has not set up E2EE keys yet")
+    return {"public_key": target["public_key"]}
+
+
 app.include_router(api_router)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 logging.basicConfig(level=logging.INFO)
