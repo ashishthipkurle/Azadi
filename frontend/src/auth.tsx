@@ -4,7 +4,7 @@
 // - After login, expo-router's index.tsx decides which role stack to send them to.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiPost, TOKEN_KEY } from "@/src/api";
+import { ApiError, apiGet, apiPost, TOKEN_KEY } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 
 export type Role = "client" | "reporter" | "admin";
@@ -44,8 +44,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const me = await apiGet<AuthUser>("/auth/me");
           setUser(me);
-        } catch {
-          await storage.secureRemove(TOKEN_KEY);
+        } catch (e) {
+          // Only clear the token if the server explicitly rejected it (401/403).
+          // For network errors or server outages (5xx), keep the token so the
+          // session survives temporary backend downtime.
+          const isAuthRejection = e instanceof ApiError && (e.status === 401 || e.status === 403);
+          if (isAuthRejection) {
+            await storage.secureRemove(TOKEN_KEY);
+          }
         }
       }
       setReady(true);
@@ -82,9 +88,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const me = await apiGet<AuthUser>("/auth/me");
       setUser(me);
-    } catch {
-      setUser(null);
-      await storage.secureRemove(TOKEN_KEY);
+    } catch (e) {
+      // Only log out if the server explicitly rejected the token.
+      const isAuthRejection = e instanceof ApiError && (e.status === 401 || e.status === 403);
+      if (isAuthRejection) {
+        setUser(null);
+        await storage.secureRemove(TOKEN_KEY);
+      }
     }
   }, []);
 
