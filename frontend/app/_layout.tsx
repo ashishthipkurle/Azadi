@@ -1,25 +1,36 @@
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect, useRef, useState } from "react";
-import { Animated, LogBox, Platform, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { LogBox, Platform, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import { useEventListener } from "expo";
-import { useVideoPlayer, VideoView } from "expo-video";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { registerForPushNotificationsAsync } from "@/src/notifications";
 import { Button, Icon } from "@/src/ui";
+import { AzadiAnimatedSplash } from "@/src/shared/azadi-animated-splash";
 
 // Disable logbox errors etc so that users can see the app
 // and agent works as expected.
 LogBox.ignoreAllLogs(true);
+LogBox.ignoreLogs([
+  "6000ms timeout exceeded",
+  "fontfaceobserver",
+  "FontObserver",
+]);
 
-// Keep the native splash visible from cold start until icon fonts register.
-// Required because @expo/vector-icons' componentDidMount fallback fires
-// Font.loadAsync against a broken vendor path if any <Icon> mounts before
-// the family is registered — which throws on Android Expo Go.
-SplashScreen.preventAutoHideAsync();
+if (Platform.OS === "web" && typeof window !== "undefined") {
+  const origOnError = window.onerror;
+  window.onerror = function (message, source, lineno, colno, error) {
+    if (String(message).includes("6000ms timeout") || String(message).includes("fontfaceobserver")) {
+      return true; // suppresses error alert/box
+    }
+    return origOnError ? origOnError.call(window, message, source, lineno, colno, error) : false;
+  };
+}
+
+// Keep the native splash visible from cold start until animated splash takes over.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function PushManager() {
   const { user } = useAuth();
@@ -31,103 +42,14 @@ function PushManager() {
   return null;
 }
 
-// Helper for Web video splash to bypass expo-video limitations
-function WebVideoSplash({ onFinish }: { onFinish: () => void }) {
-  // Expo's Asset module will give us the actual URL to the video file
-  const [uri, setUri] = useState<string | null>(null);
-  
-  useEffect(() => {
-    import("expo-asset").then(async ({ Asset }) => {
-      const asset = await Asset.loadAsync(require("@/assets/videos/opening_animation_2.mp4"));
-      setUri(asset[0].localUri || asset[0].uri);
-    });
-    
-    // Fallback in case video fails to load or play
-    const timeout = setTimeout(onFinish, 6000);
-    return () => clearTimeout(timeout);
-  }, [onFinish]);
-
-  if (!uri) return <View style={{ flex: 1, backgroundColor: "#F4F0E8" }} />;
-
-  return (
-    <View style={{
-      width: "100%",
-      height: "100%",
-      maxWidth: "100%",
-      maxHeight: "100%",
-      aspectRatio: 9 / 16,
-      overflow: "hidden",
-    }}>
-      {/* @ts-ignore - React Native Web supports rendering standard DOM elements */}
-      <video
-        ref={(el: any) => {
-          if (el) el.playbackRate = 1.5;
-        }}
-        onLoadedMetadata={(e: any) => {
-          if (e?.currentTarget) e.currentTarget.playbackRate = 1.5;
-        }}
-        onPlay={(e: any) => {
-          if (e?.currentTarget) e.currentTarget.playbackRate = 1.5;
-        }}
-        src={uri}
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "fill",
-          backgroundColor: "#F4F0E8",
-          border: "none",
-          outline: "none",
-          transform: "scale(1.015)", // Imperceptible 1.5% scale just to push the 1px artifact past the overflow:hidden wrapper
-        }}
-        autoPlay
-        muted
-        playsInline
-        onEnded={onFinish}
-      />
-    </View>
-  );
-}
-
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
-  const [isVideoFinished, setIsVideoFinished] = useState(false);
-
-  // --- Native: use the real video splash ---
-  const videoReady = useRef(false);
-  const player = useVideoPlayer(
-    Platform.OS !== "web" ? require("@/assets/videos/opening_animation_2.mp4") : null,
-    player => {
-      if (Platform.OS !== "web") {
-        player.playbackRate = 1.5;
-        player.play();
-      }
-    },
-  );
-
-  // Listen for video playback starting — hide native splash only then
-  useEventListener(player, 'statusChange', (ev: any) => {
-    if (player) {
-      player.playbackRate = 1.5;
-    }
-    if (!videoReady.current && ev?.status === 'readyToPlay') {
-      videoReady.current = true;
-      SplashScreen.hideAsync();
-    }
-  });
-
-  useEventListener(player, 'playToEnd', () => {
-    setIsVideoFinished(true);
-  });
+  const [isSplashFinished, setIsSplashFinished] = useState(false);
 
   useEffect(() => {
-    // On web or if fonts error out, hide splash immediately
-    if (Platform.OS === "web" && (loaded || error)) {
-      SplashScreen.hideAsync();
-    }
-    // Safety timeout: hide native splash after 4s no matter what
-    // (prevents the app from getting stuck on the static logo)
+    // If fonts error out or on web, ensure splash doesn't block indefinitely
     const timeout = setTimeout(() => {
-      SplashScreen.hideAsync();
+      setIsSplashFinished(true);
     }, 4000);
     return () => clearTimeout(timeout);
   }, [loaded, error]);
@@ -140,18 +62,8 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <PushManager />
-        {!isVideoFinished ? (
-          Platform.OS === "web" ? (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8", justifyContent: "center", alignItems: "center" }]}>
-              <WebVideoSplash onFinish={() => setIsVideoFinished(true)} />
-            </View>
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#F4F0E8" }]}>
-              <View style={{ position: "absolute", width: "100%", height: "100%", maxWidth: "100%", maxHeight: "100%", aspectRatio: 9 / 16, overflow: "hidden" }}>
-                <VideoView player={player} style={{ width: "100%", height: "100%", transform: [{ scale: 1.015 }] }} contentFit="fill" nativeControls={false} />
-              </View>
-            </View>
-          )
+        {!isSplashFinished ? (
+          <AzadiAnimatedSplash onFinish={() => setIsSplashFinished(true)} />
         ) : (
           <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
         )}

@@ -7,7 +7,24 @@
 // Usage: const [loaded, error] = useIconFonts();
 
 import Constants, { ExecutionEnvironment } from "expo-constants";
+import * as Font from "expo-font";
 import { useFonts } from "expo-font";
+import { Platform } from "react-native";
+
+// Web runtime safeguards against fontfaceobserver 6000ms timeout:
+if (Platform.OS === "web" && typeof window !== "undefined") {
+  // Prevent unhandled promise rejection from popping red error screen
+  window.addEventListener("unhandledrejection", (event: any) => {
+    const msg = event?.reason?.message || String(event?.reason || "");
+    if (msg.includes("6000ms timeout") || msg.includes("fontfaceobserver") || msg.includes("timeout exceeded")) {
+      event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      console.warn("[Azadi] Suppressed font loading timeout warning:", msg);
+    }
+  });
+}
 
 const ICON_VECTOR_VERSION = "15.1.1";
 
@@ -50,3 +67,4 @@ export const useIconFonts = (): readonly [boolean, Error | null] =>
       ? iconFontMap()
       : {},
   );
+

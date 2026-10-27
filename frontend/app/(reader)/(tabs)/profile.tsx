@@ -251,7 +251,8 @@ const createStyles = (colors: any) => StyleSheet.create({
     marginTop: 2,
   },
   gridItem: {
-    width: "33%",
-    aspectRatio: 1,
+    width: "33.333%",
+    aspectRatio: 9 / 16,
+    padding: 1.5,
   },
 });

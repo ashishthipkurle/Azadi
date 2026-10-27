@@ -38,6 +38,7 @@ export default function Index() {
   const [password, setPassword] = useState("");
   const [resetToken, setResetToken] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
 
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
@@ -203,14 +204,29 @@ export default function Index() {
               />
 
               <Overline>NEW PASSWORD</Overline>
-              <TextInput
-                style={styles.input}
-                placeholder="At least 6 characters"
-                placeholderTextColor="#8A8F91"
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="At least 6 characters"
+                  placeholderTextColor="#8A8F91"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                <Pressable
+                  onPress={() => setShowPassword((prev) => !prev)}
+                  style={styles.passwordEye}
+                  hitSlop={12}
+                  accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                  accessibilityRole="button"
+                >
+                  <Icon
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    color={colors.muted}
+                    size={20}
+                  />
+                </Pressable>
+              </View>
 
               <Button testID="auth-submit-button" onPress={submit} loading={busy} tone="dark">
                 Reset password
@@ -282,15 +298,31 @@ export default function Index() {
               />
 
               <Overline>PASSWORD</Overline>
-              <TextInput
-                testID="auth-password-input"
-                style={styles.input}
-                placeholder="At least 6 characters"
-                placeholderTextColor="#8A8F91"
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  testID="auth-password-input"
+                  style={styles.passwordInput}
+                  placeholder="At least 6 characters"
+                  placeholderTextColor="#8A8F91"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                <Pressable
+                  testID="auth-toggle-password-visibility"
+                  onPress={() => setShowPassword((prev) => !prev)}
+                  style={styles.passwordEye}
+                  hitSlop={12}
+                  accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                  accessibilityRole="button"
+                >
+                  <Icon
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    color={colors.muted}
+                    size={20}
+                  />
+                </Pressable>
+              </View>
 
               <Button
                 testID="auth-submit-button"
@@ -353,6 +385,29 @@ const createStyles = (colors: any) => StyleSheet.create({
     marginTop: 8,
     marginBottom: 18,
     borderRadius: 8,
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginTop: 8,
+    marginBottom: 18,
+    borderRadius: 8,
+  },
+  passwordInput: {
+    flex: 1,
+    color: colors.ink,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 15,
+  },
+  passwordEye: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    justifyContent: "center",
+    alignItems: "center",
   },
   helper: { color: colors.muted, fontSize: 12, marginTop: 6, marginBottom: 6 },
   roleRow: { flexDirection: "row", gap: 10, marginTop: 8, marginBottom: 12 },

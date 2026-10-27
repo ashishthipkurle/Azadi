@@ -1,5 +1,6 @@
 // AuthContext: single source of truth for the logged-in user + JWT.
-// - On boot, restores the token from SecureStore and hydrates the user via /auth/me.
+// - On boot, restores the cached user profile instantly from AsyncStorage,
+//   then validates the token with /auth/me in the background.
 // - Exposes login/register/logout that all screens can call.
 // - After login, expo-router's index.tsx decides which role stack to send them to.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
@@ -33,6 +34,29 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Key for caching the full user profile in AsyncStorage. */
+const USER_CACHE_KEY = "azadi.user_profile";
+
+/** Save user profile to AsyncStorage so the session restores instantly on reboot. */
+async function cacheUser(u: AuthUser | null) {
+  if (u) {
+    await storage.setItem(USER_CACHE_KEY, JSON.stringify(u));
+  } else {
+    await storage.removeItem(USER_CACHE_KEY);
+  }
+}
+
+/** Read the cached user profile from AsyncStorage. */
+async function getCachedUser(): Promise<AuthUser | null> {
+  const raw = await storage.getItem<string>(USER_CACHE_KEY, "");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [ready, setReady] = useState(false);
@@ -41,17 +65,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const token = await storage.secureGet<string>(TOKEN_KEY, "");
       if (token) {
+        // Step 1: Restore cached user profile instantly — no network needed.
+        const cached = await getCachedUser();
+        if (cached) setUser(cached);
+
+        // Step 2: Validate the token with the backend in the background.
         try {
           const me = await apiGet<AuthUser>("/auth/me");
           setUser(me);
+          await cacheUser(me); // refresh the cache with latest data
         } catch (e) {
-          // Only clear the token if the server explicitly rejected it (401/403).
-          // For network errors or server outages (5xx), keep the token so the
+          // Only clear the token+cache if the server explicitly rejected it (401/403).
+          // For network errors or server outages (5xx), keep everything so the
           // session survives temporary backend downtime.
           const isAuthRejection = e instanceof ApiError && (e.status === 401 || e.status === 403);
           if (isAuthRejection) {
             await storage.secureRemove(TOKEN_KEY);
+            await cacheUser(null);
+            setUser(null);
           }
+          // Otherwise: cached user stays active — the app works offline / during outages.
         }
       }
       setReady(true);
@@ -61,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const res = await apiPost<{ access_token: string; user: AuthUser }>("/auth/login", { email, password });
     await storage.secureSet(TOKEN_KEY, res.access_token);
+    await cacheUser(res.user);
     setUser(res.user);
     return res.user;
   }, []);
@@ -68,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginAnonymous = useCallback(async () => {
     const res = await apiPost<{ access_token: string; user: AuthUser }>("/auth/anonymous", {});
     await storage.secureSet(TOKEN_KEY, res.access_token);
+    await cacheUser(res.user);
     setUser(res.user);
     return res.user;
   }, []);
@@ -75,12 +110,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(async (name: string, email: string, password: string, role: Role) => {
     const res = await apiPost<{ access_token: string; user: AuthUser }>("/auth/register", { name, email, password, role });
     await storage.secureSet(TOKEN_KEY, res.access_token);
+    await cacheUser(res.user);
     setUser(res.user);
     return res.user;
   }, []);
 
   const logout = useCallback(async () => {
     await storage.secureRemove(TOKEN_KEY);
+    await cacheUser(null);
     setUser(null);
   }, []);
 
@@ -88,12 +125,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const me = await apiGet<AuthUser>("/auth/me");
       setUser(me);
+      await cacheUser(me);
     } catch (e) {
       // Only log out if the server explicitly rejected the token.
       const isAuthRejection = e instanceof ApiError && (e.status === 401 || e.status === 403);
       if (isAuthRejection) {
         setUser(null);
         await storage.secureRemove(TOKEN_KEY);
+        await cacheUser(null);
       }
     }
   }, []);
@@ -111,3 +150,4 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
   return ctx;
 }
+

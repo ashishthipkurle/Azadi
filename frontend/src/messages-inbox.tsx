@@ -153,7 +153,11 @@ export default function MessagesInbox() {
                     </Text>
                   </View>
                   <Text style={{ fontSize: 14, color: isUnread ? colors.ink : colors.muted, fontWeight: isUnread ? "700" : "400", marginTop: 4 }} numberOfLines={1}>
-                    {item.last_message.body}
+                    {item.last_message.body.startsWith("[MEDIA] ") || item.last_message.body.startsWith("[EMEDIA] ")
+                      ? "📷 Photo"
+                      : (item.last_message as any).encrypted
+                        ? "🔒 Encrypted message"
+                        : item.last_message.body}
                   </Text>
                 </View>
                 {isUnread && <View style={{ width: 8, height: 8, borderRadius: 8, backgroundColor: colors.red, marginLeft: 8 }} />}

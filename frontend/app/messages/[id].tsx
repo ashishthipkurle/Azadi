@@ -5,6 +5,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -110,6 +111,7 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [otherUser, setOtherUser] = useState<{ name: string; avatar_url?: string } | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -475,12 +477,14 @@ export default function ChatScreen() {
                   }}
                 >
                   {isMedia ? (
-                    <CachedImage
-                      url={mediaUrl as string}
-                      style={{ width: 200, height: 200, borderRadius: 16 }}
-                      contentFit="cover"
-                      mediaKey={mediaKey}
-                    />
+                    <Pressable onPress={() => setFullscreenImage(mediaUrl)}>
+                      <CachedImage
+                        url={mediaUrl as string}
+                        style={{ width: 200, height: 200, borderRadius: 16 }}
+                        contentFit="cover"
+                        mediaKey={mediaKey}
+                      />
+                    </Pressable>
                   ) : (
                     <Text style={{ color: isMine ? "#fff" : colors.ink, fontSize: 15, lineHeight: 20 }}>{dec}</Text>
                   )}
@@ -600,6 +604,30 @@ export default function ChatScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Fullscreen Image Viewer Modal */}
+      <Modal
+        visible={!!fullscreenImage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFullscreenImage(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", justifyContent: "center", alignItems: "center" }}>
+          <Pressable
+            onPress={() => setFullscreenImage(null)}
+            style={{ position: "absolute", top: 50, right: 20, zIndex: 10, padding: 12 }}
+          >
+            <Icon name="close" color="#fff" size={28} />
+          </Pressable>
+          {fullscreenImage && (
+            <Image
+              source={{ uri: fullscreenImage }}
+              style={{ width: "90%", height: "70%", borderRadius: 8 }}
+              contentFit="contain"
+            />
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

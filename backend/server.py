@@ -66,8 +66,26 @@ def jwt_secret() -> str:
     return value
 
 
+def get_env_var(key: str, default: Optional[str] = None) -> Optional[str]:
+    val = os.getenv(key)
+    if val:
+        return val
+    aliases = {
+        "MUX_TOKEN_ID": ["Token ID", "TOKEN_ID", "MUX_TOKEN", "MUX_ID"],
+        "MUX_TOKEN_SECRET": ["Secret Key", "TOKEN_SECRET", "MUX_SECRET", "MUX_KEY"],
+        "LIVEKIT_URL": ["LiveKit URL", "LIVEKIT_HOST"],
+        "LIVEKIT_API_KEY": ["LiveKit API Key"],
+        "LIVEKIT_API_SECRET": ["LiveKit Secret", "LiveKit API Secret"],
+    }
+    for alias in aliases.get(key, []):
+        val = os.getenv(alias)
+        if val:
+            return val
+    return default
+
+
 def provider_required(*keys: str):
-    missing = [key for key in keys if not os.getenv(key)]
+    missing = [key for key in keys if not get_env_var(key)]
     if missing:
         feature = INTEGRATION_HINTS.get(missing[0], "This feature")
         raise HTTPException(503, f"{feature} is coming soon — add {', '.join(missing)} to backend/.env")
@@ -307,8 +325,10 @@ async def me(user: dict = Depends(current_user)):
 
 
 @api_router.get("/feed")
-async def feed(topic: Optional[str] = None, before: Optional[str] = None, since: Optional[str] = None):
+async def feed(kind: Optional[str] = None, topic: Optional[str] = None, before: Optional[str] = None, since: Optional[str] = None):
     filters = {}
+    if kind:
+        filters["kind"] = kind
     if topic and topic != "All":
         filters["topic"] = topic
     if before:
@@ -316,7 +336,14 @@ async def feed(topic: Optional[str] = None, before: Optional[str] = None, since:
     elif since:
         filters["created_at"] = {"$gt": since}
         
-    return await db.find_many("posts", filters, order_by="created_at", desc=True, limit=50)
+    posts = await db.find_many("posts", filters, order_by="created_at", desc=True, limit=50)
+    for p in posts:
+        if isinstance(p.get("media"), str):
+            try:
+                p["media"] = json.loads(p["media"])
+            except Exception:
+                p["media"] = []
+    return posts
 
 
 @api_router.get("/feed/following")
@@ -580,6 +607,12 @@ async def get_reporter(reporter_id: str, credentials: HTTPAuthorizationCredentia
         raise HTTPException(404, "Reporter not found")
     user = _strip_keys(user, ["password_hash"])
     posts = await db.find_many("posts", {"reporter_id": reporter_id}, order_by="created_at", desc=True, limit=50)
+    for p in posts:
+        if isinstance(p.get("media"), str):
+            try:
+                p["media"] = json.loads(p["media"])
+            except Exception:
+                p["media"] = []
     totals = await _support_totals([reporter_id])
     followers = await _follower_count(reporter_id)
     is_following = False
@@ -662,7 +695,14 @@ async def create_post(payload: PostCreate, user: dict = Depends(require_roles("r
 
 @api_router.get("/posts/mine")
 async def my_posts(user: dict = Depends(require_roles("reporter", "admin"))):
-    return await db.find_many("posts", {"reporter_id": user["id"]}, order_by="created_at", desc=True, limit=100)
+    posts = await db.find_many("posts", {"reporter_id": user["id"]}, order_by="created_at", desc=True, limit=100)
+    for p in posts:
+        if isinstance(p.get("media"), str):
+            try:
+                p["media"] = json.loads(p["media"])
+            except Exception:
+                p["media"] = []
+    return posts
 
 
 @api_router.get("/reporter/earnings")
@@ -804,7 +844,7 @@ async def upload_storage_file(file: UploadFile = File(...), user: dict = Depends
 @api_router.post("/media/upload-url")
 async def create_upload(payload: UploadCreate, user: dict = Depends(require_roles("reporter", "admin"))):
     provider_required("MUX_TOKEN_ID", "MUX_TOKEN_SECRET")
-    auth = (os.environ["MUX_TOKEN_ID"], os.environ["MUX_TOKEN_SECRET"])
+    auth = (get_env_var("MUX_TOKEN_ID"), get_env_var("MUX_TOKEN_SECRET"))
     body = {
         "cors_origin": "*",
         "new_asset_settings": {"playback_policies": ["public"], "passthrough": user["id"]},
@@ -837,7 +877,7 @@ async def media_status(upload_id: str, user: dict = Depends(current_user)):
         raise HTTPException(404, "Upload not found")
     if record.get("playback_id"):
         return record
-    auth = (os.environ["MUX_TOKEN_ID"], os.environ["MUX_TOKEN_SECRET"])
+    auth = (get_env_var("MUX_TOKEN_ID"), get_env_var("MUX_TOKEN_SECRET"))
     async with httpx.AsyncClient(timeout=20) as http:
         up_res = await http.get(f"https://api.mux.com/video/v1/uploads/{upload_id}", auth=auth)
         if up_res.status_code >= 400:
@@ -884,7 +924,7 @@ async def live_token(payload: LiveCreate, user: dict = Depends(require_roles("re
     provider_required("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
     room_name = payload.room or f"freepress-{uuid.uuid4().hex[:12]}"
     token = (
-        livekit_api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
+        livekit_api.AccessToken(get_env_var("LIVEKIT_API_KEY"), get_env_var("LIVEKIT_API_SECRET"))
         .with_identity(user["id"])
         .with_name(user["name"])
         .with_grants(livekit_api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True))
@@ -899,7 +939,7 @@ async def live_token(payload: LiveCreate, user: dict = Depends(require_roles("re
         "status": "live",
         "started_at": now(),
     })
-    return {"token": token.to_jwt(), "url": os.environ["LIVEKIT_URL"], "room": room_name, "session_id": session_id}
+    return {"token": token.to_jwt(), "url": get_env_var("LIVEKIT_URL"), "room": room_name, "session_id": session_id}
 
 
 @api_router.get("/live/sessions")
@@ -914,12 +954,12 @@ async def live_viewer_token(payload: dict, user: dict = Depends(current_user)):
     if not room_name:
         raise HTTPException(400, "room is required")
     token = (
-        livekit_api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
+        livekit_api.AccessToken(get_env_var("LIVEKIT_API_KEY"), get_env_var("LIVEKIT_API_SECRET"))
         .with_identity(user["id"])
         .with_name(user["name"])
         .with_grants(livekit_api.VideoGrants(room_join=True, room=room_name, can_publish=False, can_subscribe=True))
     )
-    return {"token": token.to_jwt(), "url": os.environ["LIVEKIT_URL"], "room": room_name}
+    return {"token": token.to_jwt(), "url": get_env_var("LIVEKIT_URL"), "room": room_name}
 
 
 @api_router.post("/live/{session_id}/end")
@@ -1369,6 +1409,33 @@ async def get_e2ee_key(user_id: str, user: dict = Depends(current_user)):
     if not target or not target.get("public_key"):
         raise HTTPException(404, "User has not set up E2EE keys yet")
     return {"public_key": target["public_key"]}
+
+
+@api_router.get("/notifications")
+async def get_user_notifications(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+    if not credentials:
+        return []
+    try:
+        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+        user_id = claims.get("sub")
+        items = await db.find_many("notifications", {"recipient_id": user_id})
+        items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return items
+    except Exception:
+        return []
+
+@api_router.post("/notifications/read-all")
+async def mark_user_notifications_read(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+    if not credentials:
+        return {"ok": True}
+    try:
+        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+        user_id = claims.get("sub")
+        sb = db.get_client()
+        sb.table("notifications").update({"read": True}).eq("recipient_id", user_id).execute()
+        return {"ok": True}
+    except Exception:
+        return {"ok": True}
 
 
 app.include_router(api_router)

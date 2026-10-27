@@ -37,9 +37,9 @@ export default function ArticlesScreen() {
 
   const load = useCallback(async () => {
     try {
-      // For now, let's just fetch dispatches as articles
       const p = await apiGet<Post[]>(`/feed?kind=dispatch`).catch(() => [] as Post[]);
-      setPosts(p);
+      const articles = (p || []).filter((item) => item.kind !== "video");
+      setPosts(articles);
     } catch {
       // quiet fail
     } finally {
@@ -57,10 +57,11 @@ export default function ArticlesScreen() {
     setLoadingMore(true);
     try {
       const more = await apiGetPaginated<Post[]>(`/feed`, "before", last.created_at + "&kind=dispatch");
-      if (more.length === 0) {
+      const moreArticles = (more || []).filter((item) => item.kind !== "video");
+      if (moreArticles.length === 0) {
         hasMoreRef.current = false;
-      } else if (more.length > 0) {
-        setPosts((prev) => [...prev, ...more]);
+      } else if (moreArticles.length > 0) {
+        setPosts((prev) => [...prev, ...moreArticles]);
       }
     } catch {
     } finally {

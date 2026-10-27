@@ -69,9 +69,17 @@ export class Storage extends StorageBase {
   ): Promise<Fallback | null> {
     try {
       const raw = await SecureStore.getItemAsync(key);
-      return this.retrieve(raw, fallback);
+      if (raw !== null && raw !== undefined) {
+        return this.retrieve(raw, fallback);
+      }
     } catch (e) {
       this.warn("secureGet", key, e);
+    }
+    // Fallback to AsyncStorage if SecureStore was unavailable or missed
+    try {
+      const fallbackRaw = await AsyncStorage.getItem(`__sec_${key}`);
+      return this.retrieve(fallbackRaw, fallback);
+    } catch {
       return fallback;
     }
   }
@@ -80,23 +88,35 @@ export class Storage extends StorageBase {
     key: string,
     value: Value,
   ): Promise<boolean> {
+    let success = false;
     try {
       await SecureStore.setItemAsync(key, JSON.stringify(value));
-      return true;
+      success = true;
     } catch (e) {
       this.warn("secureSet", key, e);
-      return false;
     }
+    try {
+      await AsyncStorage.setItem(`__sec_${key}`, JSON.stringify(value));
+      success = true;
+    } catch (e) {
+      this.warn("secureSet fallback", key, e);
+    }
+    return success;
   }
 
   async secureRemove(key: string): Promise<boolean> {
+    let success = false;
     try {
       await SecureStore.deleteItemAsync(key);
-      return true;
+      success = true;
     } catch (e) {
       this.warn("secureRemove", key, e);
-      return false;
     }
+    try {
+      await AsyncStorage.removeItem(`__sec_${key}`);
+      success = true;
+    } catch {}
+    return success;
   }
 }
 

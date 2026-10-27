@@ -39,18 +39,18 @@ export default function ReporterTabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
+          title: "All",
           tabBarIcon: ({ color, focused }) => (
-            <Icon name={focused ? "home" : "home-outline"} color={color} size={22} />
+            <Icon name={focused ? "newspaper" : "newspaper-outline"} color={color} size={22} />
           ),
         }}
       />
       <Tabs.Screen
-        name="video"
+        name="reels"
         options={{
-          title: "Play",
+          title: "Reels",
           tabBarIcon: ({ color, focused }) => (
-            <Icon name={focused ? "play-circle" : "play-circle-outline"} color={color} size={24} />
+            <Icon name={focused ? "videocam" : "videocam-outline"} color={color} size={24} />
           ),
         }}
       />
@@ -66,13 +66,12 @@ export default function ReporterTabsLayout() {
       <Tabs.Screen
         name="articles"
         options={{
-          title: "Read",
+          title: "Articles",
           tabBarIcon: ({ color, focused }) => (
             <Icon name={focused ? "document-text" : "document-text-outline"} color={color} size={22} />
           ),
         }}
       />
-
       <Tabs.Screen
         name="profile"
         options={{
@@ -80,6 +79,12 @@ export default function ReporterTabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Icon name={focused ? "person" : "person-outline"} color={color} size={22} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="video"
+        options={{
+          href: null,
         }}
       />
     </Tabs>

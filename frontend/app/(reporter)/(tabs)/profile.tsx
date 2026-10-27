@@ -1,7 +1,6 @@
 import { useRouter } from "expo-router";
 import { useState, useCallback, useEffect } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView, RefreshControl, Dimensions, ActivityIndicator } from "react-native";
-const { width: windowWidth } = Dimensions.get("window");
+import { View, Text, StyleSheet, Pressable, ScrollView, RefreshControl, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 
@@ -12,6 +11,7 @@ import { apiGet } from "@/src/api";
 import { MediaPlayer } from "@/src/media-player";
 import { shareProfile } from "@/src/share";
 import { AppHeader } from "@/src/shared/app-header";
+import { ReelModal, ReelItem } from "@/src/shared/reel-modal";
 
 export default function Profile() {
   const { colors } = useTheme();
@@ -23,6 +23,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<"grid" | "video">("grid");
+  const [activeReel, setActiveReel] = useState<ReelItem | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -143,22 +144,59 @@ export default function Profile() {
                 try { mediaArr = JSON.parse(mediaArr); } catch { mediaArr = []; }
               }
               const firstMedia = Array.isArray(mediaArr) && mediaArr.length > 0 && typeof mediaArr[0] === "object" ? mediaArr[0] : null;
+              const isVideo = p.kind === "video" || firstMedia?.kind === "video";
+
+              if (isVideo && firstMedia?.playback_id) {
+                return (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => setActiveReel({
+                      id: p.id,
+                      title: p.title,
+                      body: p.body,
+                      reporter_name: user?.name,
+                      playback_id: firstMedia.playback_id,
+                    })}
+                    style={styles.gridItem}
+                  >
+                    <View style={styles.gridItemInner}>
+                      <Image
+                        source={{ uri: `https://image.mux.com/${firstMedia.playback_id}/thumbnail.jpg?width=400&height=711&fit_mode=smartcrop` }}
+                        style={StyleSheet.absoluteFillObject}
+                        contentFit="cover"
+                      />
+                      <View style={styles.gridVideoBadge}>
+                        <Icon name="play" color="#fff" size={12} />
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              }
+
               return (
                 <Pressable key={p.id} onPress={() => router.push({ pathname: "/(reporter)/post/[id]", params: { id: p.id } })} style={styles.gridItem}>
-                  {firstMedia?.playback_id ? (
-                    <MediaPlayer media={firstMedia} fill={true} radius={0} />
-                  ) : (
-                    <View style={{ flex: 1, backgroundColor: colors.surface, padding: 8, overflow: "hidden" }}>
-                      <Text style={{ fontSize: 10, fontWeight: "800", color: colors.muted }}>{p.kind.toUpperCase()}</Text>
-                      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.ink, marginTop: 4 }} numberOfLines={3}>{p.title}</Text>
-                    </View>
-                  )}
+                  <View style={styles.gridItemInner}>
+                    {firstMedia?.playback_id ? (
+                      <Image
+                        source={{ uri: `https://image.mux.com/${firstMedia.playback_id}/thumbnail.jpg?width=400&height=711&fit_mode=smartcrop` }}
+                        style={StyleSheet.absoluteFillObject}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <View style={{ flex: 1, backgroundColor: colors.surface, padding: 8, overflow: "hidden" }}>
+                        <Text style={{ fontSize: 10, fontWeight: "800", color: colors.muted }}>{p.kind.toUpperCase()}</Text>
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: colors.ink, marginTop: 4 }} numberOfLines={3}>{p.title}</Text>
+                      </View>
+                    )}
+                  </View>
                 </Pressable>
               );
             })
           )}
         </View>
       </ScrollView>
+
+      <ReelModal reel={activeReel} onClose={() => setActiveReel(null)} />
     </SafeAreaView>
   );
 }
@@ -298,11 +336,33 @@ const createStyles = (colors: any) => StyleSheet.create({
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 2,
     marginTop: 2,
+    width: "100%",
   },
   gridItem: {
-    width: (windowWidth - 4) / 3,
-    height: (windowWidth - 4) / 3,
+    width: "33.333%",
+    aspectRatio: 9 / 16,
+    padding: 1.5,
+    backgroundColor: colors.paper,
+  },
+  gridItemInner: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    backgroundColor: colors.dark,
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 4,
+  },
+  gridVideoBadge: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
