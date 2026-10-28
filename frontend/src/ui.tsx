@@ -12,14 +12,16 @@ export function Icon({
   name,
   color = "#18202A",
   size = 20,
+  style,
 }: {
   name: keyof typeof Ionicons.glyphMap;
   color?: string;
   size?: number;
+  style?: any;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
-  return <Ionicons name={name} color={color} size={size} />;
+  return <Ionicons name={name} color={color} size={size} style={style} />;
 }
 
 type ButtonTone = "dark" | "red" | "paper" | "outline" | "ghost";

@@ -26,6 +26,12 @@ import { sharePost } from "@/src/share";
 import { ReelsCommentModal } from "@/src/shared/reels-comment-modal";
 import { Icon, Toast } from "@/src/ui";
 import { storage } from "@/src/utils/storage";
+import {
+  useAppDispatch,
+  useAppSelector,
+  hydratePostsInteractions,
+  toggleLikeWithBatchBuffer,
+} from "@/src/store";
 
 export type Post = {
   id: string;
@@ -57,11 +63,32 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
+let targetReelPost: Post | null = null;
+
+export function prepareReelTransition(post: any) {
+  if (!post) {
+    targetReelPost = null;
+    return;
+  }
+  let mediaArr = post.media;
+  if (typeof mediaArr === "string") {
+    try {
+      mediaArr = JSON.parse(mediaArr);
+    } catch {
+      mediaArr = [];
+    }
+  }
+  targetReelPost = {
+    ...post,
+    media: Array.isArray(mediaArr) ? mediaArr : [],
+  };
+}
+
 export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const router = useRouter();
-  const { initialPostId } = useLocalSearchParams<{ initialPostId?: string }>();
+  const { initialPostId, navTimestamp } = useLocalSearchParams<{ initialPostId?: string; navTimestamp?: string }>();
   const flatListRef = useRef<FlatList>(null);
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -79,7 +106,12 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     }
   }, [containerHeight]);
 
-  const [posts, setPosts] = useState<Post[]>([]);
+  const [posts, setPosts] = useState<Post[]>(() => {
+    if (initialPostId && targetReelPost && targetReelPost.id === initialPostId) {
+      return [targetReelPost];
+    }
+    return [];
+  });
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -87,35 +119,39 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
 
   // Track active visible post for single-item playback
   const [visiblePostId, setVisiblePostId] = useState<string | null>(initialPostId || null);
+  const [listResetKey, setListResetKey] = useState<number>(0);
+
+  // Synchronously adjust state during render if a new reel navigation happened (instant, zero delay, no old video)
+  const [lastNavKey, setLastNavKey] = useState<string | undefined>(undefined);
+  const currentNavKey = initialPostId ? `${initialPostId}_${navTimestamp || ""}` : undefined;
+
+  if (currentNavKey && currentNavKey !== lastNavKey) {
+    setLastNavKey(currentNavKey);
+    setListResetKey((k) => k + 1);
+
+    const target = (targetReelPost && targetReelPost.id === initialPostId)
+      ? targetReelPost
+      : posts.find((p) => p.id === initialPostId);
+
+    if (target) {
+      const others = posts.filter((p) => p.id !== target.id);
+      setPosts([target, ...others]);
+      setVisiblePostId(target.id);
+      if (activeTab !== "videos") setActiveTab("videos");
+    } else {
+      setVisiblePostId(initialPostId || null);
+      if (activeTab !== "videos") setActiveTab("videos");
+    }
+  }
 
   // Track document visibility on web (switching browser tabs / window minimize)
   const [isDocVisible, setIsDocVisible] = useState(true);
 
-  // Likes & Comments interaction states
-  const [likedPosts, setLikedPosts] = useState<Record<string, boolean>>({});
-  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
-  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
+  // Likes & Comments interaction state managed via Redux
+  const dispatch = useAppDispatch();
+  const interactions = useAppSelector((state) => state.interactions.posts);
   const [activeCommentPost, setActiveCommentPost] = useState<Post | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: "info" | "success" | "error" } | null>(null);
-
-  // Load persisted likes & counts from storage
-  useEffect(() => {
-    async function loadInteractions() {
-      const savedLikes = (await storage.getItem<string[]>("azadi.reels.likes", [])) || [];
-      const likeMap: Record<string, boolean> = {};
-      savedLikes.forEach((id) => {
-        likeMap[id] = true;
-      });
-      setLikedPosts(likeMap);
-
-      const savedCounts = (await storage.getItem<Record<string, number>>("azadi.reels.like_counts", {})) || {};
-      setLikeCounts(savedCounts);
-
-      const savedCommentCounts = (await storage.getItem<Record<string, number>>("azadi.reels.comment_counts", {})) || {};
-      setCommentCounts(savedCommentCounts);
-    }
-    loadInteractions();
-  }, []);
 
   // Web tab/window visibility listener
   useEffect(() => {
@@ -150,8 +186,8 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
       });
 
       // If initialPostId is specified, locate or fetch it
-      let targetPost: Post | null = null;
-      if (initialPostId) {
+      let targetPost: Post | null = (targetReelPost && targetReelPost.id === initialPostId) ? targetReelPost : null;
+      if (initialPostId && !targetPost) {
         targetPost = videoPosts.find((item) => item.id === initialPostId) || null;
         if (!targetPost) {
           try {
@@ -178,11 +214,12 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
       }
 
       setPosts(finalOrderedPosts);
+      dispatch(hydratePostsInteractions(finalOrderedPosts));
       setLiveSessions(live);
 
-      // Default visible post is the first video (index 0)
+      // Preserve currently playing video or set to first video
       if (finalOrderedPosts.length > 0) {
-        setVisiblePostId(finalOrderedPosts[0].id);
+        setVisiblePostId((current) => current || finalOrderedPosts[0].id);
       }
     } catch {
       // quiet fail
@@ -195,14 +232,12 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     load();
   }, [load]);
 
-  // When posts load or initialPostId changes, ensure we start on the first item (offset 0)
+  // Ensure visiblePostId is initialized if not set yet
   useEffect(() => {
-    if (posts.length > 0) {
-      setActiveTab("videos");
+    if (activeTab === "videos" && !visiblePostId && posts.length > 0) {
       setVisiblePostId(posts[0].id);
-      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
-  }, [initialPostId, posts]);
+  }, [activeTab, posts, visiblePostId]);
 
   const viewabilityConfigCallbackPairs = useRef([
     {
@@ -220,22 +255,9 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     },
   ]);
 
-  // Toggle Like with instant optimistic UI + persistent storage
-  const toggleLike = async (post: Post) => {
-    const isLiked = !!likedPosts[post.id];
-    const currentCount = likeCounts[post.id] ?? (isLiked ? 1 : 0);
-    const newCount = isLiked ? Math.max(0, currentCount - 1) : currentCount + 1;
-
-    const newLikedPosts = { ...likedPosts, [post.id]: !isLiked };
-    const newLikeCounts = { ...likeCounts, [post.id]: newCount };
-
-    setLikedPosts(newLikedPosts);
-    setLikeCounts(newLikeCounts);
-
-    // Save liked post IDs
-    const likedIds = Object.keys(newLikedPosts).filter((id) => newLikedPosts[id]);
-    await storage.setItem("azadi.reels.likes", likedIds);
-    await storage.setItem("azadi.reels.like_counts", newLikeCounts);
+  // Toggle Like with instant optimistic UI + 2-second debounced batch dispatch
+  const toggleLike = (post: Post) => {
+    dispatch(toggleLikeWithBatchBuffer(post.id));
   };
 
   // Share handler
@@ -248,13 +270,6 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     if (res.method === "clipboard") {
       setToast({ message: "Link copied to clipboard!", tone: "success" });
     }
-  };
-
-  // Update comment count when a comment is added via modal
-  const handleCommentAdded = async (postId: string, newCount: number) => {
-    const updatedCounts = { ...commentCounts, [postId]: newCount };
-    setCommentCounts(updatedCounts);
-    await storage.setItem("azadi.reels.comment_counts", updatedCounts);
   };
 
   const renderItem = ({ item }: { item: any }) => {
@@ -299,9 +314,10 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     const isCurrentActive = visiblePostId === post.id;
     const shouldPlay = isFocused && isDocVisible && isCurrentActive && activeTab === "videos";
 
-    const isLiked = !!likedPosts[post.id];
-    const likeCount = likeCounts[post.id] ?? (isLiked ? 1 : 0);
-    const commentCount = commentCounts[post.id] ?? post.comment_count ?? 0;
+    const postInteraction = interactions[post.id];
+    const isLiked = postInteraction ? postInteraction.liked : !!(post as any).liked;
+    const likeCount = postInteraction ? postInteraction.likeCount : ((post as any).like_count ?? 0);
+    const commentCount = postInteraction ? postInteraction.commentCount : ((post as any).comment_count ?? 0);
 
     return (
       <View style={[styles.reelContainer, { height: reelHeight, width: "100%" }]}>
@@ -416,6 +432,7 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
 
       {((activeTab === "videos" && posts.length > 0) || (activeTab === "live" && liveSessions.length > 0)) && (
         <FlatList
+          key={`reels-list-${listResetKey}`}
           ref={flatListRef}
           style={{ flex: 1, width: "100%" }}
           data={activeTab === "videos" ? posts : liveSessions}
@@ -457,11 +474,6 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
         visible={!!activeCommentPost}
         post={activeCommentPost}
         onClose={() => setActiveCommentPost(null)}
-        onCommentAdded={(newCount) => {
-          if (activeCommentPost) {
-            handleCommentAdded(activeCommentPost.id, newCount);
-          }
-        }}
       />
     </View>
   );

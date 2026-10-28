@@ -18,6 +18,12 @@ import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Icon } from "@/src/ui";
 import { storage } from "@/src/utils/storage";
+import {
+  useAppDispatch,
+  usePostComments,
+  fetchCommentsForPost,
+  submitCommentForPost,
+} from "@/src/store";
 
 export type ReelComment = {
   id: string;
@@ -57,75 +63,32 @@ export function ReelsCommentModal({
   const { height: windowHeight } = useWindowDimensions();
   const { user } = useAuth();
 
-  const [comments, setComments] = useState<ReelComment[]>([]);
+  const dispatch = useAppDispatch();
+  const comments = usePostComments(post?.id || "");
   const [inputText, setInputText] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!visible || !post?.id) return;
-    let isMounted = true;
-
-    async function loadComments() {
-      const storageKey = `azadi.reels.comments.${post?.id}`;
-      const cached = (await storage.getItem<ReelComment[]>(storageKey, [])) || [];
-      if (isMounted && cached && cached.length > 0) {
-        setComments(cached);
-      }
-
-      // Try fetching server comments
-      try {
-        const serverComments = await apiGet<any[]>(`/posts/${post?.id}/comments`);
-        if (isMounted && Array.isArray(serverComments) && serverComments.length > 0) {
-          const merged = [...serverComments];
-          // Merge unique cached comments that might not be on server yet
-          for (const c of cached) {
-            if (!merged.some((m) => m.id === c.id)) {
-              merged.push(c);
-            }
-          }
-          setComments(merged);
-          await storage.setItem(storageKey, merged);
-        }
-      } catch {
-        // quiet fallback to local comments
-      }
-    }
-
-    loadComments();
-    return () => {
-      isMounted = false;
-    };
-  }, [visible, post?.id]);
+    dispatch(fetchCommentsForPost(post.id));
+  }, [visible, post?.id, dispatch]);
 
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || !post?.id || submitting) return;
 
-    setSubmitting(true);
-    const newComment: ReelComment = {
-      id: `comm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      post_id: post.id,
-      user_name: user?.name || "Reader",
-      user_id: user?.id,
-      body: text,
-      created_at: new Date().toISOString(),
-    };
-
-    const updated = [newComment, ...comments];
-    setComments(updated);
     setInputText("");
-    setSubmitting(false);
-
-    // Save locally
-    const storageKey = `azadi.reels.comments.${post.id}`;
-    await storage.setItem(storageKey, updated);
-    onCommentAdded?.(updated.length);
-
-    // Sync to backend if available
+    setSubmitting(true);
     try {
-      await apiPost(`/posts/${post.id}/comments`, { body: text });
-    } catch {
-      // quiet fallback
+      await dispatch(
+        submitCommentForPost(post.id, text, {
+          id: user?.id,
+          name: user?.name || "Reader",
+        })
+      );
+      onCommentAdded?.(comments.length + 1);
+    } finally {
+      setSubmitting(false);
     }
   };
 

@@ -1,5 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import * as FileSystem from "expo-file-system";
+import { Platform } from "react-native";
 
 // Open (or create) the local database asynchronously
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -96,6 +97,9 @@ export async function getLocalMessages(chatId: string, limit = 50, offset = 0): 
 
 // Media Caching Logic
 export async function getCachedMedia(url: string): Promise<string> {
+  if (Platform.OS === "web") {
+    return url;
+  }
   const db = await getDB();
   const row: any = await db.getFirstAsync(`SELECT local_uri FROM media_cache WHERE url = ?`, [url]);
   if (row) {

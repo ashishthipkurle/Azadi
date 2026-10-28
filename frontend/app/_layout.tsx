@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { LogBox, Platform, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
+import { Provider } from "react-redux";
+import { store } from "@/src/store";
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { registerForPushNotificationsAsync } from "@/src/notifications";
@@ -59,16 +61,18 @@ export default function RootLayout() {
   if (!loaded && !error) return null;
 
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <PushManager />
-        {!isSplashFinished ? (
-          <AzadiAnimatedSplash onFinish={() => setIsSplashFinished(true)} />
-        ) : (
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
-        )}
-      </AuthProvider>
-    </SafeAreaProvider>
+    <Provider store={store}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <PushManager />
+          {!isSplashFinished ? (
+            <AzadiAnimatedSplash onFinish={() => setIsSplashFinished(true)} />
+          ) : (
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F0E8" } }} />
+          )}
+        </AuthProvider>
+      </SafeAreaProvider>
+    </Provider>
   );
 }
 

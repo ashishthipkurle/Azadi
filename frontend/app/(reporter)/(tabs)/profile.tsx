@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { useState, useCallback, useEffect } from "react";
 import { View, Text, StyleSheet, Pressable, ScrollView, RefreshControl, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,7 +17,7 @@ export default function Profile() {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, refresh } = useAuth();
   
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -40,6 +40,13 @@ export default function Profile() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+      refresh().catch(() => {});
+    }, [load, refresh])
+  );
 
   if (loading) {
     return (
@@ -98,7 +105,7 @@ export default function Profile() {
               <Text style={styles.statLabel}>followers</Text>
             </View>
             <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{r?.following || 0}</Text>
+              <Text style={styles.statNumber}>{r?.following ?? user?.following ?? 0}</Text>
               <Text style={styles.statLabel}>following</Text>
             </View>
           </View>

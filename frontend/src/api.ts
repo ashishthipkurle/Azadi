@@ -5,12 +5,22 @@ import Constants from "expo-constants";
 
 import { storage } from "@/src/utils/storage";
 
-const RAW =
-  process.env.EXPO_PUBLIC_RELAY_URL ||
-  (Constants.expoConfig?.extra as any)?.backendUrl ||
-  "";
+function getBaseUrl(): string {
+  // If running in browser on localhost or local network IP, prioritize local backend server
+  if (typeof window !== "undefined" && window.location) {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host.startsWith("10.") || host.startsWith("192.168.")) {
+      return `http://${host}:8000`;
+    }
+  }
+  return (
+    process.env.EXPO_PUBLIC_RELAY_URL ||
+    (Constants.expoConfig?.extra as any)?.backendUrl ||
+    "http://10.35.60.44:8000"
+  );
+}
 
-export const API = `${RAW}/api`;
+export const API = `${getBaseUrl()}/api`;
 
 export const TOKEN_KEY = "azadi.jwt";
 

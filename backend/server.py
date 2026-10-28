@@ -150,6 +150,15 @@ class CommentCreate(BaseModel):
     parent_id: Optional[str] = None
 
 
+class LikeAction(BaseModel):
+    post_id: str
+    liked: bool
+
+
+class BatchLikesPayload(BaseModel):
+    actions: list[LikeAction]
+
+
 class Message(BaseModel):
     id: str
     sender_id: str
@@ -221,6 +230,40 @@ async def current_user(credentials: HTTPAuthorizationCredentials = Depends(beare
     except Exception as exc:
         logging.info("auth rejected: %s", exc)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
+
+
+async def optional_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Optional[dict]:
+    if not credentials:
+        return None
+    try:
+        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+        user = await db.find_one("users", {"id": claims["sub"], "disabled": False})
+        return _strip_keys(user, ["password_hash"]) if user else None
+    except Exception:
+        return None
+
+
+async def _enrich_posts_interaction(posts: list[dict], user: Optional[dict] = None) -> list[dict]:
+    if not posts:
+        return posts
+    post_ids = [p["id"] for p in posts if p.get("id")]
+    if not post_ids:
+        return posts
+
+    my_liked_set = set()
+    if user and user.get("id"):
+        try:
+            my_likes = await db.find_many("likes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+            my_liked_set = {row["post_id"] for row in my_likes}
+        except Exception as e:
+            logging.warning("Error fetching user likes: %s", e)
+
+    for p in posts:
+        p["like_count"] = p.get("like_count", 0) or 0
+        p["comment_count"] = p.get("comment_count", 0) or 0
+        p["liked"] = p["id"] in my_liked_set if user else False
+
+    return posts
 
 
 def require_roles(*roles: str):
@@ -325,7 +368,13 @@ async def me(user: dict = Depends(current_user)):
 
 
 @api_router.get("/feed")
-async def feed(kind: Optional[str] = None, topic: Optional[str] = None, before: Optional[str] = None, since: Optional[str] = None):
+async def feed(
+    kind: Optional[str] = None,
+    topic: Optional[str] = None,
+    before: Optional[str] = None,
+    since: Optional[str] = None,
+    user: Optional[dict] = Depends(optional_user)
+):
     filters = {}
     if kind:
         filters["kind"] = kind
@@ -343,7 +392,7 @@ async def feed(kind: Optional[str] = None, topic: Optional[str] = None, before: 
                 p["media"] = json.loads(p["media"])
             except Exception:
                 p["media"] = []
-    return posts
+    return await _enrich_posts_interaction(posts, user)
 
 
 @api_router.get("/feed/following")
@@ -371,17 +420,24 @@ async def feed_following(
     elif since:
         filters["created_at"] = {"$gt": since}
         
-    return await db.find_many(
+    posts = await db.find_many(
         "posts",
         filters,
         order_by="created_at",
         desc=True,
         limit=100,
     )
+    for p in posts:
+        if isinstance(p.get("media"), str):
+            try:
+                p["media"] = json.loads(p["media"])
+            except Exception:
+                p["media"] = []
+    return await _enrich_posts_interaction(posts, user)
 
 
 @api_router.get("/feed/trending")
-async def feed_trending():
+async def feed_trending(topic: Optional[str] = None, user: Optional[dict] = Depends(optional_user)):
     """Rank posts by (reads + supports*3) in the past 24 hours.
     Support counts more than a read because it's a stronger signal, but we
     don't allow paid promotion to influence ranking beyond genuine reader
@@ -418,7 +474,14 @@ async def feed_trending():
         return read_counts.get(post["id"], 0) + support_counts.get(post["reporter_id"], 0) * 3
 
     ranked = sorted(posts, key=lambda p: (score(p), p["created_at"]), reverse=True)
-    return [{**p, "trending_score": score(p), "reads_24h": read_counts.get(p["id"], 0)} for p in ranked[:40]]
+    for p in ranked:
+        if isinstance(p.get("media"), str):
+            try:
+                p["media"] = json.loads(p["media"])
+            except Exception:
+                p["media"] = []
+    enriched = await _enrich_posts_interaction(ranked[:40], user)
+    return [{**p, "trending_score": score(p), "reads_24h": read_counts.get(p["id"], 0)} for p in enriched]
 
 
 @api_router.post("/posts/{post_id}/read")
@@ -469,6 +532,165 @@ async def list_bookmarks(user: dict = Depends(current_user)):
     order = {pid: idx for idx, pid in enumerate(post_ids)}
     posts.sort(key=lambda p: order.get(p["id"], 9999))
     return {"post_ids": post_ids, "posts": posts}
+
+
+# ─── Likes & Comments (Optimized with Batching & Redux Buffer) ───────────────
+
+@api_router.post("/posts/batch-likes")
+async def batch_likes(payload: BatchLikesPayload, user: dict = Depends(current_user)):
+    """Batch-process like/unlike actions buffered in Redux (dispatched every 2s).
+    Greatly reduces database load from high-frequency row locking."""
+    for action in payload.actions:
+        pid = action.post_id
+        if action.liked:
+            existing = await db.find_one("likes", {"post_id": pid, "user_id": user["id"]})
+            if not existing:
+                await db.upsert_one("likes", {
+                    "post_id": pid,
+                    "user_id": user["id"],
+                    "created_at": now(),
+                }, on_conflict="post_id,user_id")
+                new_count = await db.count("likes", {"post_id": pid})
+                await db.update_one("posts", {"id": pid}, {"like_count": new_count})
+                p = await db.find_one("posts", {"id": pid})
+                if p:
+                    await notify(
+                        recipient_id=p["reporter_id"],
+                        kind="like",
+                        actor=user,
+                        message=f"{user['name']} liked your dispatch.",
+                        subject_id=pid,
+                        subject_kind="post",
+                    )
+        else:
+            existing = await db.find_one("likes", {"post_id": pid, "user_id": user["id"]})
+            if existing:
+                await db.delete_one("likes", {"post_id": pid, "user_id": user["id"]})
+                new_count = await db.count("likes", {"post_id": pid})
+                await db.update_one("posts", {"id": pid}, {"like_count": new_count})
+
+    post_ids = list({a.post_id for a in payload.actions})
+    posts = await db.find_many("posts", {"id": {"$in": post_ids}})
+    user_likes = await db.find_many("likes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+    liked_set = {l["post_id"] for l in user_likes}
+
+    results = [
+        {
+            "post_id": p["id"],
+            "like_count": p.get("like_count", 0) or 0,
+            "liked": p["id"] in liked_set,
+        }
+        for p in posts
+    ]
+    return {"ok": True, "results": results}
+
+
+@api_router.post("/posts/{post_id}/like")
+async def toggle_single_like(post_id: str, user: dict = Depends(current_user)):
+    """Toggle like for a single post."""
+    existing = await db.find_one("likes", {"post_id": post_id, "user_id": user["id"]})
+    p = await db.find_one("posts", {"id": post_id})
+    if not p:
+        raise HTTPException(404, "Post not found")
+
+    if existing:
+        await db.delete_one("likes", {"post_id": post_id, "user_id": user["id"]})
+        new_count = await db.count("likes", {"post_id": post_id})
+        await db.update_one("posts", {"id": post_id}, {"like_count": new_count})
+        return {"liked": False, "like_count": new_count, "post_id": post_id}
+    else:
+        await db.upsert_one("likes", {
+            "post_id": post_id,
+            "user_id": user["id"],
+            "created_at": now(),
+        }, on_conflict="post_id,user_id")
+        new_count = await db.count("likes", {"post_id": post_id})
+        await db.update_one("posts", {"id": post_id}, {"like_count": new_count})
+        await notify(
+            recipient_id=p["reporter_id"],
+            kind="like",
+            actor=user,
+            message=f"{user['name']} liked your dispatch.",
+            subject_id=post_id,
+            subject_kind="post",
+        )
+        return {"liked": True, "like_count": new_count, "post_id": post_id}
+
+
+@api_router.get("/posts/likes/mine")
+async def my_liked_posts(user: dict = Depends(current_user)):
+    rows = await db.find_many("likes", {"user_id": user["id"]})
+    return {"liked_post_ids": [r["post_id"] for r in rows]}
+
+
+@api_router.get("/posts/{post_id}")
+async def get_single_post(post_id: str, user: Optional[dict] = Depends(optional_user)):
+    post = await db.find_one("posts", {"id": post_id})
+    if not post:
+        raise HTTPException(404, "Post not found")
+    if isinstance(post.get("media"), str):
+        try:
+            post["media"] = json.loads(post["media"])
+        except Exception:
+            post["media"] = []
+    enriched = await _enrich_posts_interaction([post], user)
+    return enriched[0]
+
+
+@api_router.get("/posts/{post_id}/comments")
+async def get_post_comments(post_id: str):
+    """Retrieve comments for a dispatch, ordered chronologically."""
+    comments = await db.find_many("comments", {"post_id": post_id}, order_by="created_at", desc=False, limit=200)
+    return comments
+
+
+@api_router.post("/posts/{post_id}/comments")
+async def create_post_comment(post_id: str, payload: CommentCreate, user: dict = Depends(current_user)):
+    """Create a new comment and increment post comment_count."""
+    post = await db.find_one("posts", {"id": post_id})
+    if not post:
+        raise HTTPException(404, "Post not found")
+
+    comment_data = {
+        "id": str(uuid.uuid4()),
+        "post_id": post_id,
+        "user_id": user["id"],
+        "user_name": user["name"],
+        "body": payload.body.strip(),
+        "parent_id": payload.parent_id,
+        "created_at": now(),
+    }
+    created = await db.insert_one("comments", comment_data)
+
+    new_count = await db.count("comments", {"post_id": post_id})
+    await db.update_one("posts", {"id": post_id}, {"comment_count": new_count})
+
+    await notify(
+        recipient_id=post["reporter_id"],
+        kind="comment",
+        actor=user,
+        message=f"{user['name']} commented: {payload.body[:60]}",
+        subject_id=post_id,
+        subject_kind="post",
+    )
+    return created
+
+
+@api_router.delete("/comments/{comment_id}")
+async def delete_post_comment(comment_id: str, user: dict = Depends(current_user)):
+    """Delete a comment and decrement post comment_count."""
+    comment = await db.find_one("comments", {"id": comment_id})
+    if not comment:
+        raise HTTPException(404, "Comment not found")
+    if comment["user_id"] != user["id"] and user["role"] not in ("admin", "reporter"):
+        raise HTTPException(403, "Not allowed to delete this comment")
+
+    await db.delete_one("comments", {"id": comment_id})
+
+    new_count = await db.count("comments", {"post_id": comment["post_id"]})
+    await db.update_one("posts", {"id": comment["post_id"]}, {"comment_count": new_count})
+
+    return {"ok": True}
 
 
 async def _support_totals(reporter_ids: list[str]) -> dict[str, int]:
@@ -748,6 +970,30 @@ async def reporter_earnings(user: dict = Depends(require_roles("reporter", "admi
         "pending_count": pending_count,
         "monthly_pledges": monthly_pledges,
         "top_supporters": top_supporters,
+    }
+
+
+@api_router.get("/reporter/analytics")
+async def reporter_analytics(user: dict = Depends(require_roles("reporter", "admin"))):
+    """Analytics overview for the signed-in reporter."""
+    reporter_id = user["id"]
+    posts = await db.find_many("posts", {"reporter_id": reporter_id})
+    followers = await db.count("reporter_follows", {"reporter_id": reporter_id})
+    total_posts = len(posts)
+    total_reads = sum(p.get("views", p.get("reads", 0)) for p in posts)
+    top_posts = [
+        {
+            "post_id": p["id"],
+            "title": p.get("title", "Untitled"),
+            "reads": p.get("views", p.get("reads", 0)),
+        }
+        for p in sorted(posts, key=lambda x: x.get("views", x.get("reads", 0)), reverse=True)[:5]
+    ]
+    return {
+        "total_reads": total_reads,
+        "total_followers": followers,
+        "total_posts": total_posts,
+        "top_posts": top_posts,
     }
 
 

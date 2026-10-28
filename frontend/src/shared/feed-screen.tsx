@@ -31,6 +31,14 @@ import { sharePost } from "@/src/share";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, EmptyState, Icon, Toast, ConfirmModal } from "@/src/ui";
 import { AppHeader } from "@/src/shared/app-header";
+import { prepareReelTransition } from "@/src/shared/reels-screen";
+import { useFollowStore, followStore } from "@/src/follow-store";
+import {
+  useAppDispatch,
+  usePostInteraction,
+  hydratePostsInteractions,
+  toggleLikeWithBatchBuffer,
+} from "@/src/store";
 
 type Post = {
   id: string;
@@ -97,8 +105,11 @@ function VideoReportFeedCard({
   setReporting: (p: Post) => void;
 }) {
   const [isMuted, setIsMuted] = useState(true);
-  const [liked, setLiked] = useState(false);
-  const [likeCount, setLikeCount] = useState(0);
+  const dispatch = useAppDispatch();
+  const interaction = usePostInteraction(post.id);
+  const liked = interaction ? interaction.liked : !!(post as any).liked;
+  const likeCount = interaction ? interaction.likeCount : ((post as any).like_count ?? 0);
+  const commentCount = interaction ? interaction.commentCount : ((post as any).comment_count ?? 0);
 
   // Extract first video media or fallback
   let mediaList = post.media;
@@ -117,9 +128,10 @@ function VideoReportFeedCard({
   const isBookmarked = bookmarkIds.has(post.id);
 
   const openReelFullScreen = () => {
+    prepareReelTransition(post);
     router.push({
       pathname: `${routePrefix}/reels` as any,
-      params: { initialPostId: post.id },
+      params: { initialPostId: post.id, navTimestamp: String(Date.now()) },
     });
   };
 
@@ -188,12 +200,6 @@ function VideoReportFeedCard({
           </View>
         )}
 
-        {/* Watch Full Reel Chip (Bottom-Left) */}
-        <View style={styles.watchReelChip} pointerEvents="none">
-          <Icon name="play" size={12} color="#FFFFFF" />
-          <Text style={styles.watchReelChipText}>Watch in Reels</Text>
-        </View>
-
         {/* Sound Toggle Button (Bottom-Right) */}
         <Pressable
           style={styles.videoSoundBtn}
@@ -213,11 +219,7 @@ function VideoReportFeedCard({
           <Pressable
             style={styles.videoActionBtn}
             onPress={() => {
-              setLiked((prev) => {
-                const next = !prev;
-                setLikeCount((c) => (next ? c + 1 : Math.max(0, c - 1)));
-                return next;
-              });
+              dispatch(toggleLikeWithBatchBuffer(post.id));
             }}
           >
             <Icon
@@ -235,8 +237,8 @@ function VideoReportFeedCard({
             onPress={() => router.push({ pathname: `${routePrefix}/post/[id]` as any, params: { id: post.id } })}
           >
             <Icon name="chatbubble-outline" color={colors.ink} size={20} />
-            {post.comment_count ? (
-              <Text style={styles.videoActionCount}>{post.comment_count}</Text>
+            {commentCount > 0 ? (
+              <Text style={styles.videoActionCount}>{commentCount}</Text>
             ) : null}
           </Pressable>
 
@@ -290,7 +292,7 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const [showReporterModal, setShowReporterModal] = useState(false);
 
   const isFocused = useIsFocused();
@@ -363,8 +365,65 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
   const [hasUnread, setHasUnread] = useState(false);
   const [newDispatchesCount, setNewDispatchesCount] = useState(0);
 
-  const [followedReporters, setFollowedReporters] = useState<{ id: string; name: string; avatar_url?: string; verified: boolean }[]>([]);
+  const dispatch = useAppDispatch();
+  const { followedReporters, isFollowing, follow, unfollow, syncFollowed } = useFollowStore();
   const [selectedFollowingReporterId, setSelectedFollowingReporterId] = useState<string | null>(null);
+  const [followingLoading, setFollowingLoading] = useState(false);
+  const reporterFetchIdRef = useRef(0);
+
+  const handleSelectReporter = useCallback(async (reporterId: string | null) => {
+    setSelectedFollowingReporterId(reporterId);
+    setFollowingLoading(true);
+    setFollowingPosts([]); // Instantly remove the previous reporter's content!
+
+    const fetchId = ++reporterFetchIdRef.current;
+    try {
+      let url = `/feed/following${topic !== "All" ? `?topic=${topic}` : ""}`;
+      if (reporterId) {
+        url += (url.includes("?") ? "&" : "?") + `reporter_id=${reporterId}`;
+      }
+      const posts = await apiGet<Post[]>(url);
+      if (fetchId === reporterFetchIdRef.current) {
+        setFollowingPosts(posts);
+        dispatch(hydratePostsInteractions(posts));
+      }
+    } catch {
+      if (fetchId === reporterFetchIdRef.current) {
+        setToast({ message: "Could not load reporter dispatches.", tone: "error" });
+      }
+    } finally {
+      if (fetchId === reporterFetchIdRef.current) {
+        setFollowingLoading(false);
+      }
+    }
+  }, [topic]);
+
+  const lastAvatarTapRef = useRef<{ id: string; time: number } | null>(null);
+
+  const handleReporterAvatarPress = useCallback(
+    (r: { id: string; name: string }) => {
+      const isAlreadySelected = selectedFollowingReporterId === r.id;
+      const now = Date.now();
+      const isRapidDoubleTap =
+        lastAvatarTapRef.current?.id === r.id && now - lastAvatarTapRef.current.time < 500;
+
+      // 1. If the reporter is ALREADY selected, click once to open their profile.
+      // 2. If not selected, a second click (or double click) opens their profile.
+      if (isAlreadySelected || isRapidDoubleTap) {
+        lastAvatarTapRef.current = null;
+        router.push({
+          pathname: `${routePrefix}/reporter/[id]` as any,
+          params: { id: r.id },
+        });
+        return;
+      }
+
+      // First click: select the reporter and filter dispatches
+      lastAvatarTapRef.current = { id: r.id, time: now };
+      handleSelectReporter(r.id);
+    },
+    [selectedFollowingReporterId, routePrefix, router, handleSelectReporter]
+  );
 
   const load = useCallback(async () => {
     try {
@@ -390,7 +449,8 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
       setTrendingPosts(trending);
       setBookmarkIds(new Set(bookmarks.post_ids));
       setHasUnread(notifs.some((n) => !n.read));
-      setFollowedReporters(followedReps);
+      followStore.setFollowedReporters(followedReps);
+      dispatch(hydratePostsInteractions([...p, ...following, ...trending]));
     } catch {
       setToast({ message: "Could not load the dispatch wall.", tone: "error" });
     } finally {
@@ -401,6 +461,24 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
   useEffect(() => {
     load();
   }, [load]);
+
+  useFocusEffect(
+    useCallback(() => {
+      syncFollowed().catch(() => {});
+      if (tab === "following") {
+        let url = `/feed/following${topic !== "All" ? `?topic=${topic}` : ""}`;
+        if (selectedFollowingReporterId) {
+          url += (url.includes("?") ? "&" : "?") + `reporter_id=${selectedFollowingReporterId}`;
+        }
+        apiGet<Post[]>(url)
+          .then((posts) => {
+            setFollowingPosts(posts);
+            dispatch(hydratePostsInteractions(posts));
+          })
+          .catch(() => {});
+      }
+    }, [tab, topic, selectedFollowingReporterId, syncFollowed])
+  );
 
   // Record a read for the top-most posts so trending reflects real engagement.
   const seenRef = useRef<Set<string>>(new Set());
@@ -590,7 +668,7 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
               {tab === "following" && followedReporters.length > 0 && (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyStrip} style={{ marginBottom: 16 }}>
                   <Pressable
-                    onPress={() => setSelectedFollowingReporterId(null)}
+                    onPress={() => handleSelectReporter(null)}
                     style={styles.storyAvatarContainer}
                   >
                     <View style={[styles.storyAvatarWrap, selectedFollowingReporterId === null && styles.storyAvatarActive]}>
@@ -606,7 +684,7 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
                     return (
                       <Pressable
                         key={r.id}
-                        onPress={() => setSelectedFollowingReporterId(isActive ? null : r.id)}
+                        onPress={() => handleReporterAvatarPress(r)}
                         style={styles.storyAvatarContainer}
                       >
                         <View style={[styles.storyAvatarWrap, isActive && styles.storyAvatarActive]}>
@@ -667,15 +745,30 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
             </>
           }
           ListEmptyComponent={
-            <EmptyState
-              title={tab === "following" ? "You're not following anyone yet." : "Nothing here yet."}
-              body={
-                tab === "following"
-                  ? "Tap a reporter's byline to open their profile and follow them."
-                  : "Check back soon — new dispatches drop throughout the day."
-              }
-              icon="newspaper-outline"
-            />
+            tab === "following" && followingLoading ? (
+              <View style={styles.followingLoadingBox}>
+                <ActivityIndicator size="large" color={colors.red} />
+                <Text style={styles.followingLoadingText}>Loading dispatches…</Text>
+              </View>
+            ) : (
+              <EmptyState
+                title={
+                  tab === "following"
+                    ? selectedFollowingReporterId
+                      ? "No dispatches yet."
+                      : "You're not following anyone yet."
+                    : "Nothing here yet."
+                }
+                body={
+                  tab === "following"
+                    ? selectedFollowingReporterId
+                      ? "This reporter hasn't published any dispatches yet."
+                      : "Tap a reporter's byline to open their profile and follow them."
+                    : "Check back soon — new dispatches drop throughout the day."
+                }
+                icon="newspaper-outline"
+              />
+            )
           }
           renderItem={({ item: post, index: i }) => {
             const isVideoReport =
@@ -869,16 +962,43 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
                           {r.support_total ? ` · ₹${r.support_total} supported` : ""}
                         </Text>
                       </View>
-                      <Pressable
-                        testID="support-seven-rupees-button"
-                        onPress={(e) => {
-                          e.stopPropagation?.();
-                          openSupport(r);
-                        }}
-                        style={styles.supportSmall}
-                      >
-                        <Text style={styles.supportSmallText}>₹7</Text>
-                      </Pressable>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Pressable
+                          onPress={async (e) => {
+                            e.stopPropagation?.();
+                            const followingThis = isFollowing(r.id);
+                            if (followingThis) {
+                              await unfollow(r.id, (delta) =>
+                                updateUser((prev) => (prev ? { ...prev, following: Math.max(0, (prev.following || 0) + delta) } : prev))
+                              );
+                              setToast({ message: `Unfollowed ${r.name}.`, tone: "info" });
+                            } else {
+                              await follow(
+                                { id: r.id, name: r.name, avatar_url: (r as any).avatar_url, verified: r.verified },
+                                (delta) =>
+                                  updateUser((prev) => (prev ? { ...prev, following: Math.max(0, (prev.following || 0) + delta) } : prev))
+                              );
+                              setToast({ message: `Following ${r.name}.`, tone: "success" });
+                            }
+                          }}
+                          style={[styles.followSmallBtn, isFollowing(r.id) && styles.followingSmallBtn]}
+                        >
+                          <Text style={[styles.followSmallBtnText, isFollowing(r.id) && styles.followingSmallBtnText]}>
+                            {isFollowing(r.id) ? "Following" : "Follow"}
+                          </Text>
+                        </Pressable>
+
+                        <Pressable
+                          testID="support-seven-rupees-button"
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            openSupport(r);
+                          }}
+                          style={styles.supportSmall}
+                        >
+                          <Text style={styles.supportSmallText}>₹7</Text>
+                        </Pressable>
+                      </View>
                     </Pressable>
                   ))
                 )}
@@ -1128,13 +1248,11 @@ const createStyles = (colors: any) =>
     },
     videoFrameContainer: {
       width: "100%",
+      alignSelf: "stretch",
       aspectRatio: 4 / 5,
-      maxHeight: 440,
       backgroundColor: "#050709",
       position: "relative",
       overflow: "hidden",
-      justifyContent: "center",
-      alignItems: "center",
     },
     videoPlaceholderPoster: {
       ...StyleSheet.absoluteFillObject,
@@ -1151,26 +1269,6 @@ const createStyles = (colors: any) =>
       alignItems: "center",
       borderWidth: 1.5,
       borderColor: "rgba(255, 255, 255, 0.3)",
-    },
-    watchReelChip: {
-      position: "absolute",
-      left: 12,
-      bottom: 12,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      backgroundColor: "rgba(0, 0, 0, 0.65)",
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 14,
-      borderWidth: 0.5,
-      borderColor: "rgba(255, 255, 255, 0.2)",
-    },
-    watchReelChipText: {
-      color: "#FFFFFF",
-      fontSize: 11,
-      fontWeight: "700",
-      letterSpacing: 0.2,
     },
     videoSoundBtn: {
       position: "absolute",
@@ -1294,5 +1392,38 @@ const createStyles = (colors: any) =>
       marginBottom: 12,
       textAlignVertical: "top",
       borderRadius: 8,
+    },
+    followingLoadingBox: {
+      paddingVertical: 56,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 12,
+    },
+    followingLoadingText: {
+      color: colors.muted,
+      fontSize: 13,
+      fontWeight: "600",
+    },
+    followSmallBtn: {
+      paddingHorizontal: 12,
+      height: 34,
+      justifyContent: "center",
+      alignItems: "center",
+      borderRadius: 18,
+      backgroundColor: colors.ink,
+    },
+    followSmallBtnText: {
+      color: colors.surface,
+      fontSize: 12,
+      fontWeight: "700",
+    },
+    followingSmallBtn: {
+      backgroundColor: "transparent",
+      borderWidth: 1,
+      borderColor: colors.line,
+    },
+    followingSmallBtnText: {
+      color: colors.muted,
+      fontWeight: "700",
     },
   });

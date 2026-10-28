@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useRouter, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { StyleSheet, Text, View, Pressable, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -7,17 +7,23 @@ import { Image } from "expo-image";
 import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Button, Icon, ConfirmModal, Toast, EmptyState } from "@/src/ui";
-import { sharePost } from "@/src/share";
+import { shareProfile } from "@/src/share";
 import { AppHeader } from "@/src/shared/app-header";
 
 export default function Profile() {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, refresh } = useAuth();
   const [showReporterModal, setShowReporterModal] = useState(false);
   const [toast, setToast] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"grid" | "bookmarks">("grid");
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh().catch(() => {});
+    }, [refresh])
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
@@ -73,7 +79,7 @@ export default function Profile() {
           <Pressable onPress={() => router.push("/profile-edit" as any)} style={styles.actionBtn}>
             <Text style={styles.actionBtnText}>Edit profile</Text>
           </Pressable>
-          <Pressable onPress={() => sharePost("Check out my profile on Azadi!", `https://azadi.freepress.in/users/${user?.id}`)} style={styles.actionBtn}>
+          <Pressable onPress={() => shareProfile("Check out my profile on Azadi!", `https://azadi.freepress.in/users/${user?.id}`)} style={styles.actionBtn}>
             <Text style={styles.actionBtnText}>Share profile</Text>
           </Pressable>
         </View>

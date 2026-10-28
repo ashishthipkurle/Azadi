@@ -22,6 +22,7 @@ import { SupportChoiceSheet, type SupportInterval } from "@/src/support-choice";
 import { useTheme } from "@/src/hooks/use-theme";
 import { EmptyState, Icon, Toast } from "@/src/ui";
 import { ReelModal, ReelItem } from "@/src/shared/reel-modal";
+import { useFollowStore, followStore } from "@/src/follow-store";
 
 type ProfileResp = {
   reporter: {
@@ -58,7 +59,8 @@ export default function ReporterProfileScreen({ routePrefix = "/(reader)" }: { r
   const styles = createStyles(colors);
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
+  const { follow, unfollow } = useFollowStore();
   const [data, setData] = useState<ProfileResp | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -72,6 +74,17 @@ export default function ReporterProfileScreen({ routePrefix = "/(reader)" }: { r
   const load = useCallback(async () => {
     try {
       const res = await apiGet<ProfileResp>(`/reporters/${id}`);
+      if (res?.reporter?.is_following) {
+        followStore.setFollowedReporters([
+          ...followStore.getFollowedReporters().filter((r) => r.id !== res.reporter.id),
+          {
+            id: res.reporter.id,
+            name: res.reporter.name,
+            avatar_url: res.reporter.avatar_url,
+            verified: !!res.reporter.verified,
+          },
+        ]);
+      }
       setData(res);
     } catch (e) {
       const message = e instanceof ApiError ? e.message : "Could not load this reporter.";
@@ -87,11 +100,31 @@ export default function ReporterProfileScreen({ routePrefix = "/(reader)" }: { r
 
   const performUnfollow = async () => {
     if (!data) return;
+    const rep = data.reporter;
     setShowDropdown(false);
+
+    // 1. Instant optimistic UI on current profile
+    setData({
+      ...data,
+      reporter: {
+        ...rep,
+        is_following: false,
+        followers: Math.max(0, (rep.followers || 1) - 1),
+      },
+    });
+
+    // 2. Instant global update to Home screen following strip & Profile tab following count
     try {
-      const res = await apiDelete<{ followers: number }>(`/reporters/${id}/follow`);
-      setData({ ...data, reporter: { ...data.reporter, is_following: false, followers: res.followers } });
+      const res = await unfollow(
+        rep.id,
+        (delta) => updateUser((prev) => (prev ? { ...prev, following: Math.max(0, (prev.following || 0) + delta) } : prev))
+      );
+      if (res && typeof res.followers === "number") {
+        setData((prev) => (prev ? { ...prev, reporter: { ...prev.reporter, followers: res.followers } } : prev));
+      }
     } catch (e) {
+      // Revert if error
+      setData({ ...data, reporter: { ...rep, is_following: true, followers: rep.followers } });
       const message = e instanceof ApiError ? e.message : "Unfollow action failed.";
       setToast({ message, tone: "error" });
     }
@@ -99,11 +132,31 @@ export default function ReporterProfileScreen({ routePrefix = "/(reader)" }: { r
 
   const toggleFollow = async () => {
     if (!data) return;
+    const rep = data.reporter;
+
+    // 1. Instant optimistic UI on current profile
+    setData({
+      ...data,
+      reporter: {
+        ...rep,
+        is_following: true,
+        followers: (rep.followers || 0) + 1,
+      },
+    });
+    setToast({ message: `Following ${rep.name}.`, tone: "success" });
+
+    // 2. Instant global update to Home screen following strip & Profile tab following count
     try {
-      const res = await apiPost<{ followers: number }>(`/reporters/${id}/follow`);
-      setData({ ...data, reporter: { ...data.reporter, is_following: true, followers: res.followers } });
-      setToast({ message: `Following ${data.reporter.name}.`, tone: "success" });
+      const res = await follow(
+        { id: rep.id, name: rep.name, avatar_url: rep.avatar_url, verified: rep.verified },
+        (delta) => updateUser((prev) => (prev ? { ...prev, following: Math.max(0, (prev.following || 0) + delta) } : prev))
+      );
+      if (res && typeof res.followers === "number") {
+        setData((prev) => (prev ? { ...prev, reporter: { ...prev.reporter, followers: res.followers } } : prev));
+      }
     } catch (e) {
+      // Revert if error
+      setData({ ...data, reporter: { ...rep, is_following: false, followers: rep.followers } });
       const message = e instanceof ApiError ? e.message : "Follow action failed.";
       setToast({ message, tone: "error" });
     }

@@ -15,6 +15,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  BackHandler,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -214,6 +215,20 @@ export default function Studio() {
       if (connection) connection.disconnect().catch(() => {});
     };
   }, [connection]);
+
+  // Hardware back press navigation to reporter home
+  useEffect(() => {
+    const handleBack = () => {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace("/(reporter)/(tabs)");
+      }
+      return true;
+    };
+    const sub = BackHandler.addEventListener("hardwareBackPress", handleBack);
+    return () => sub.remove();
+  }, [router]);
 
   const uploadDocument = async () => {
     try {
@@ -561,7 +576,7 @@ export default function Studio() {
           if (router.canGoBack()) {
             router.back();
           } else {
-            router.replace("/(reader)/(tabs)");
+            router.replace("/(reporter)/(tabs)");
           }
         }}
       />

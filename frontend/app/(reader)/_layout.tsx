@@ -9,7 +9,7 @@ export default function ReaderLayout() {
   if (!user) return <Redirect href="/" />;
   if (user.disabled) return <Redirect href="/suspended" />;
   if (user.role !== "client") {
-    const dest = user.role === "reporter" ? "/(reporter)/studio" : "/(admin)/dashboard";
+    const dest = user.role === "reporter" ? "/(reporter)/(tabs)" : "/(admin)/dashboard";
     return <Redirect href={dest} />;
   }
   return (

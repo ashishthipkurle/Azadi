@@ -20,6 +20,8 @@ export type AuthUser = {
   location?: string;
   bio?: string;
   avatar_url?: string;
+  following?: number;
+  friends?: number;
 };
 
 type AuthState = {
@@ -30,6 +32,7 @@ type AuthState = {
   register: (name: string, email: string, password: string, role: Role) => Promise<AuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  updateUser: (updater: (prev: AuthUser | null) => AuthUser | null) => void;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -137,9 +140,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateUser = useCallback((updater: (prev: AuthUser | null) => AuthUser | null) => {
+    setUser((prev) => {
+      const next = updater(prev);
+      cacheUser(next);
+      return next;
+    });
+  }, []);
+
   const value = useMemo<AuthState>(
-    () => ({ ready, user, login, loginAnonymous, register, logout, refresh }),
-    [ready, user, login, loginAnonymous, register, logout, refresh],
+    () => ({ ready, user, login, loginAnonymous, register, logout, refresh, updateUser }),
+    [ready, user, login, loginAnonymous, register, logout, refresh, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

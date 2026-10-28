@@ -256,7 +256,7 @@ const createStyles = (colors: any) => StyleSheet.create({
   image: { width: "100%", height: 220, backgroundColor: colors.dark },
   imageFill: { flex: 1, width: "100%", backgroundColor: colors.dark },
   videoFrame: { width: "100%", height: 220, backgroundColor: colors.dark, overflow: "hidden", position: "relative" },
-  videoFrameFill: { flex: 1, width: "100%", height: "100%", backgroundColor: colors.dark, overflow: "hidden", position: "relative" },
+  videoFrameFill: { flex: 1, width: "100%", height: "100%", alignSelf: "stretch", backgroundColor: colors.dark, overflow: "hidden", position: "relative" },
   placeholder: {
     width: "100%",
     height: 180,

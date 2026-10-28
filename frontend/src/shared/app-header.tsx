@@ -44,11 +44,17 @@ export function AppHeader({
   const isSmallDisplay = width < 420;
 
   const defaultLeftPress = () => {
-    if (showBack) {
-      if (router.canGoBack()) router.back();
-      else router.replace("/(reader)/(tabs)");
-    } else if (onLeftPress) {
+    if (onLeftPress) {
       onLeftPress();
+      return;
+    }
+    if (showBack) {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        const homeRoute = routePrefix === "/(reporter)" ? "/(reporter)/(tabs)" : "/(reader)/(tabs)";
+        router.replace(homeRoute as any);
+      }
     } else {
       router.push(`${routePrefix}/studio` as any);
     }
