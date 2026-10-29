@@ -16,7 +16,7 @@ function getBaseUrl(): string {
   return (
     process.env.EXPO_PUBLIC_RELAY_URL ||
     (Constants.expoConfig?.extra as any)?.backendUrl ||
-    "http://10.35.60.44:8000"
+    "https://cdn-services-production.up.railway.app"
   );
 }
 
