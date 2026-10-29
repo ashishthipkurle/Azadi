@@ -27,9 +27,9 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { apiPost, ApiError } from "@/src/api";
+import { apiGet, apiPost, ApiError } from "@/src/api";
 import { LiveStage } from "@/src/live-stage";
-import { subscribeLive, type LiveConnection } from "@/src/livekit";
+import { subscribeLive, decodeLivePayload, encodeLivePayload, type LiveConnection } from "@/src/livekit";
 import { useAuth } from "@/src/auth";
 import { useTheme } from "@/src/hooks/use-theme";
 import { Icon, Toast } from "@/src/ui";
@@ -54,31 +54,8 @@ type FloatingHeart = {
 const AVATAR_COLORS = ["#FF5722", "#4CAF50", "#2196F3", "#9C27B0", "#E91E63", "#00BCD4", "#FF9800"];
 const HEART_COLORS = ["#FF2D55", "#FF3B30", "#FF6482", "#FF9500", "#FF2D55"];
 
-const INITIAL_MESSAGES: ChatItem[] = [
-  {
-    id: "init-1",
-    sender: "aaditeecinas",
-    badge: "VIP",
-    text: "Ground report is incredible! Stay safe out there 👏",
-    avatarColor: "#FF5722",
-    timestamp: Date.now() - 30000,
-  },
-  {
-    id: "init-2",
-    sender: "baalsnay",
-    text: "baalsnay td good uio 😍😍",
-    avatarColor: "#2196F3",
-    timestamp: Date.now() - 20000,
-  },
-  {
-    id: "init-3",
-    sender: "kavita_news",
-    badge: "PRESS",
-    text: "Can you show the gathering on the left? ❤️❤️",
-    avatarColor: "#E91E63",
-    timestamp: Date.now() - 10000,
-  },
-];
+// Real streams start with clean real chat, not fake hardcoded comments
+const INITIAL_MESSAGES: ChatItem[] = [];
 
 export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePrefix?: string }) {
   const { colors } = useTheme();
@@ -86,19 +63,33 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { room, title, reporter } = useLocalSearchParams<{ room: string; title?: string; reporter?: string }>();
+  const { room, title, reporter, sessionId, reporterId } = useLocalSearchParams<{
+    room: string;
+    title?: string;
+    reporter?: string;
+    sessionId?: string;
+    reporterId?: string;
+  }>();
+
+  const isOwner = Boolean(
+    user &&
+      ((reporterId && user.id === reporterId) ||
+        (reporter && user.name === reporter) ||
+        user.role === "admin")
+  );
 
   const [track, setTrack] = useState<RemoteVideoTrack | null>(null);
   const [status, setStatus] = useState<"connecting" | "waiting" | "live" | "ended" | "error">("connecting");
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
-  const [viewers, setViewers] = useState<number>(3300);
+  const [viewers, setViewers] = useState<number>(1);
   const [connection, setConnection] = useState<LiveConnection | null>(null);
   const [messages, setMessages] = useState<ChatItem[]>(INITIAL_MESSAGES);
   const [commentText, setCommentText] = useState("");
   const [liked, setLiked] = useState(false);
-  const [likeCount, setLikeCount] = useState(1280);
+  const [likeCount, setLikeCount] = useState(0);
   const [bookmarked, setBookmarked] = useState(false);
   const [floatingHearts, setFloatingHearts] = useState<FloatingHeart[]>([]);
+  const [ending, setEnding] = useState(false);
 
   const disconnectRef = useRef<null | (() => Promise<void>)>(null);
   const chatListRef = useRef<FlatList>(null);
@@ -117,8 +108,8 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
         }
         setConnection(conn);
         setStatus("waiting");
-        if (conn.room.numParticipants > 1) {
-          setViewers(conn.room.numParticipants * 150 + Math.floor(Math.random() * 200));
+        if (conn.room.numParticipants > 0) {
+          setViewers(conn.room.numParticipants);
         }
 
         const onTrackSubscribed = (t: any, _pub: TrackPublication, _p: Participant) => {
@@ -134,15 +125,17 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
           }
         };
         const onParticipant = () => {
-          setViewers((prev) => Math.max(prev, conn.room.numParticipants * 150));
+          if (conn.room?.numParticipants) {
+            setViewers(conn.room.numParticipants);
+          }
         };
         const onDisconnected = () => setStatus("ended");
 
-        // Handle data channel chat messages & likes
+        // Handle data channel chat messages & likes using safe decoder
         const onDataReceived = (payload: Uint8Array, participant?: Participant) => {
           try {
-            const decoder = new TextDecoder();
-            const text = decoder.decode(payload);
+            const text = decodeLivePayload(payload);
+            if (!text) return;
             const data = JSON.parse(text);
             if (data.type === "chat") {
               const senderName = participant?.name || participant?.identity || "Viewer";
@@ -164,14 +157,16 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
         };
 
         // Attach any already-published video track
-        conn.room.remoteParticipants.forEach((rp) => {
-          rp.videoTrackPublications.forEach((pub) => {
-            if (pub.track) {
-              setTrack(pub.track as RemoteVideoTrack);
-              setStatus("live");
-            }
+        try {
+          conn.room.remoteParticipants.forEach((rp) => {
+            rp.videoTrackPublications.forEach((pub) => {
+              if (pub.track) {
+                setTrack(pub.track as RemoteVideoTrack);
+                setStatus("live");
+              }
+            });
           });
-        });
+        } catch {}
 
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const lk = require("livekit-client");
@@ -212,6 +207,34 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
     }
   };
 
+  const handleEndBroadcast = async () => {
+    setEnding(true);
+    try {
+      let targetId = sessionId;
+      if (!targetId) {
+        try {
+          const sessions = await apiGet<any[]>("/live/sessions");
+          const found = sessions.find((s) => s.room === room);
+          if (found) targetId = found.id;
+        } catch {}
+      }
+      if (targetId) {
+        await apiPost(`/live/${targetId}/end`, {});
+      }
+      if (disconnectRef.current) {
+        await disconnectRef.current();
+      }
+      setToast({ message: "Broadcast ended.", tone: "info" });
+      setTimeout(() => {
+        leave();
+      }, 500);
+    } catch {
+      leave();
+    } finally {
+      setEnding(false);
+    }
+  };
+
   const spawnFloatingHeart = () => {
     const anim = new Animated.Value(0);
     const id = Math.random().toString(36).substring(7);
@@ -242,10 +265,8 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
 
     if (connection?.room) {
       try {
-        const msg = { type: "like" };
-        const encoder = new TextEncoder();
-        const payload = encoder.encode(JSON.stringify(msg));
-        await connection.room.localParticipant.publishData(payload, { reliable: false });
+        const payload = encodeLivePayload(JSON.stringify({ type: "like" }));
+        await connection.room.localParticipant.publishData(payload as any, { reliable: false });
       } catch {
         /* best-effort */
       }
@@ -269,10 +290,8 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
 
     if (connection?.room) {
       try {
-        const msg = { type: "chat", text };
-        const encoder = new TextEncoder();
-        const payload = encoder.encode(JSON.stringify(msg));
-        await connection.room.localParticipant.publishData(payload, { reliable: true });
+        const payload = encodeLivePayload(JSON.stringify({ type: "chat", text }));
+        await connection.room.localParticipant.publishData(payload as any, { reliable: true });
       } catch (e) {
         console.error("Failed to broadcast chat", e);
       }
@@ -339,6 +358,17 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
             <Text style={styles.centerStatusText}>
               Waiting for {reporter || "the reporter"} to broadcast video track.
             </Text>
+            {isOwner && (
+              <Pressable
+                onPress={handleEndBroadcast}
+                disabled={ending}
+                style={[styles.returnBtn, { backgroundColor: "#E50914", marginTop: 12 }]}
+              >
+                <Text style={styles.returnBtnText}>
+                  {ending ? "Ending..." : "End & remove from feed"}
+                </Text>
+              </Pressable>
+            )}
           </View>
         ) : status === "ended" || status === "error" ? (
           <View style={styles.centerStatus}>
@@ -349,12 +379,23 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
             <Pressable onPress={leave} style={styles.returnBtn}>
               <Text style={styles.returnBtnText}>Return to feed</Text>
             </Pressable>
+            {isOwner && (
+              <Pressable
+                onPress={handleEndBroadcast}
+                disabled={ending}
+                style={[styles.returnBtn, { backgroundColor: "#E50914", marginTop: 10 }]}
+              >
+                <Text style={styles.returnBtnText}>
+                  {ending ? "Ending..." : "End & remove from feed"}
+                </Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <LiveStage track={track} fill showBadge={false} />
         )}
 
-        {/* Top Video Overlay: LIVE pill + 👁 Viewers + Close ✕ */}
+        {/* Top Video Overlay: LIVE pill + 👁 Viewers + Owner End + Close ✕ */}
         <View style={styles.streamTopOverlay} pointerEvents="box-none">
           <View style={styles.badgesGroup}>
             <View style={styles.liveBadge}>
@@ -366,9 +407,22 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
             </View>
           </View>
 
-          <Pressable testID="live-close-button" onPress={leave} hitSlop={14} style={styles.closeBtn}>
-            <Icon name="close" color="#FFFFFF" size={20} />
-          </Pressable>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {isOwner && (
+              <Pressable
+                onPress={handleEndBroadcast}
+                disabled={ending}
+                style={styles.ownerEndPill}
+              >
+                <Text style={styles.ownerEndPillText}>
+                  {ending ? "Ending…" : "End Stream"}
+                </Text>
+              </Pressable>
+            )}
+            <Pressable testID="live-close-button" onPress={leave} hitSlop={14} style={styles.closeBtn}>
+              <Icon name="close" color="#FFFFFF" size={20} />
+            </Pressable>
+          </View>
         </View>
 
         {/* Stream Reporter & Title Kicker (Top Left overlay) */}
@@ -381,31 +435,33 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
 
         {/* 3. Floating Live Chat (Lower Left overlay) */}
         <View style={styles.chatOverlay} pointerEvents="box-none">
-          <FlatList
-            ref={chatListRef}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-            onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
-            renderItem={({ item }) => (
-              <View style={styles.chatBubble}>
-                <View style={[styles.chatAvatar, { backgroundColor: item.avatarColor }]}>
-                  <Text style={styles.chatAvatarLetter}>{item.sender.charAt(0).toUpperCase()}</Text>
-                </View>
-                <View style={styles.chatTextWrap}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                    <Text style={styles.chatSender}>@{item.sender}</Text>
-                    {item.badge && (
-                      <View style={styles.chatBadge}>
-                        <Text style={styles.chatBadgeText}>{item.badge}</Text>
-                      </View>
-                    )}
+          {messages.length > 0 ? (
+            <FlatList
+              ref={chatListRef}
+              data={messages}
+              keyExtractor={(item) => item.id}
+              showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
+              renderItem={({ item }) => (
+                <View style={styles.chatBubble}>
+                  <View style={[styles.chatAvatar, { backgroundColor: item.avatarColor }]}>
+                    <Text style={styles.chatAvatarLetter}>{item.sender.charAt(0).toUpperCase()}</Text>
                   </View>
-                  <Text style={styles.chatMessage}>{item.text}</Text>
+                  <View style={styles.chatTextWrap}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                      <Text style={styles.chatSender}>@{item.sender}</Text>
+                      {item.badge && (
+                        <View style={styles.chatBadge}>
+                          <Text style={styles.chatBadgeText}>{item.badge}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.chatMessage}>{item.text}</Text>
+                  </View>
                 </View>
-              </View>
-            )}
-          />
+              )}
+            />
+          ) : null}
         </View>
 
         {/* 4. Right Vertical Action Rail */}
@@ -502,7 +558,7 @@ export default function LiveRoomScreen({ routePrefix = "/(reader)" }: { routePre
             <View>
               <Icon name="chatbox-ellipses-outline" color="#FFFFFF" size={24} />
               <View style={styles.messageBadge}>
-                <Text style={styles.messageBadgeText}>99</Text>
+                <Text style={styles.messageBadgeText}>1</Text>
               </View>
             </View>
             <Text style={styles.bottomIconLabel}>Messages</Text>
@@ -625,6 +681,18 @@ const createStyles = (colors: any) =>
       color: "#FFFFFF",
       fontSize: 14,
       fontWeight: "700",
+    },
+    ownerEndPill: {
+      backgroundColor: "#E50914",
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 14,
+    },
+    ownerEndPillText: {
+      color: "#FFFFFF",
+      fontSize: 11,
+      fontWeight: "800",
+      letterSpacing: 0.5,
     },
     streamTopOverlay: {
       position: "absolute",

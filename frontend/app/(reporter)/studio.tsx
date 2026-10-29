@@ -18,6 +18,7 @@ import {
   BackHandler,
   KeyboardAvoidingView,
   Linking,
+  PermissionsAndroid,
   Platform,
   Pressable,
   RefreshControl,
@@ -99,6 +100,7 @@ export default function Studio() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [connection, setConnection] = useState<LiveConnection | null>(null);
   const [sessionMeta, setSessionMeta] = useState<{ room: string; session_id: string } | null>(null);
+  const [existingLiveSession, setExistingLiveSession] = useState<{ id: string; title: string; room: string } | null>(null);
   const [reelTitle, setReelTitle] = useState("");
   const [reelUploading, setReelUploading] = useState(false);
   const [reelProgress, setReelProgress] = useState<"idle" | "uploading" | "processing" | "ready">("idle");
@@ -146,7 +148,7 @@ export default function Studio() {
 
     async function fetchLocation() {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await Location.getForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({});
           setLatitude(loc.coords.latitude);
@@ -209,10 +211,40 @@ export default function Studio() {
     loadAnalytics();
   }, [loadPosts, loadEarnings, loadAnalytics]);
 
-  // Clean up any live connection when the studio unmounts.
+  const checkExistingLiveSession = useCallback(async () => {
+    try {
+      const sessions = await apiGet<any[]>("/live/sessions");
+      const mine = sessions.find((s) => s.reporter_id === user?.id || s.reporter_name === user?.name);
+      setExistingLiveSession(mine || null);
+    } catch {
+      setExistingLiveSession(null);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (mode === "live") {
+      checkExistingLiveSession();
+    }
+  }, [mode, checkExistingLiveSession]);
+
+  const endExistingLiveSession = async () => {
+    if (!existingLiveSession) return;
+    setBusy(true);
+    try {
+      await apiPost(`/live/${existingLiveSession.id}/end`, {});
+      setExistingLiveSession(null);
+      setToast({ message: "Previous broadcast ended.", tone: "info" });
+    } catch {
+      setExistingLiveSession(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Clean up live connection only on explicit end, allowing navigation to Reels live tab.
   useEffect(() => {
     return () => {
-      if (connection) connection.disconnect().catch(() => {});
+      // Intentionally keep connection alive during transition to Reels tab
     };
   }, [connection]);
 
@@ -438,7 +470,7 @@ export default function Studio() {
         setAttachments([]);
       }
       setToast({ message: editId ? "Post updated." : "Post published to the wall.", tone: "success" });
-      if (editId) { router.replace("/(reporter)/profile"); return; }
+      if (editId) { router.replace("/(reporter)/profile" as any); return; }
       
       await loadPosts();
     } catch (e) {
@@ -450,24 +482,71 @@ export default function Studio() {
   };
 
   const goLive = async () => {
+    // Request camera and microphone runtime permissions on Android
+    if (Platform.OS === "android") {
+      try {
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        ]);
+        const cameraOk = granted[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED;
+        const audioOk = granted[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED;
+        if (!cameraOk || !audioOk) {
+          setToast({
+            message: "Camera and microphone permissions are required to broadcast live.",
+            tone: "error",
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn("Permission check error:", err);
+      }
+    }
+
     setBusy(true);
+    let createdSessionId: string | null = null;
     try {
       const res = await apiPost<{ token: string; url: string; room: string; session_id: string }>("/live/token", {
         title: title.trim() || "Live from the field",
       });
+      createdSessionId = res.session_id;
+
       const conn = await publishLive({ url: res.url, token: res.token });
       setConnection(conn);
       setSessionMeta({ room: res.room, session_id: res.session_id });
+      setExistingLiveSession(null);
+
       // Grab the local video track once it's published so we can preview it.
       const attach = () => {
-        const pub = conn.room.localParticipant.getTrackPublication?.((globalThis as any).LKKind?.Video || "video");
-        if (pub?.track) setLocalVideoTrack(pub.track);
+        try {
+          const pubs = conn.room.localParticipant.videoTrackPublications;
+          if (pubs && pubs.size > 0) {
+            const first = pubs.values().next().value;
+            if (first?.track) {
+              setLocalVideoTrack(first.track);
+              return;
+            }
+          }
+          const pub = conn.room.localParticipant.getTrackPublication?.((globalThis as any).LKKind?.Video || "video");
+          if (pub?.track) setLocalVideoTrack(pub.track);
+        } catch {}
       };
       attach();
       setTimeout(attach, 500);
-      setTimeout(attach, 1500);
-      setToast({ message: `Live in room ${res.room.slice(-6)}. Readers can watch now.`, tone: "success" });
+
+      // Immediately navigate to the full-screen Reels Live Stream section
+      router.replace({
+        pathname: "/(reporter)/(tabs)/reels" as any,
+        params: {
+          tab: "live",
+          initialRoom: res.room,
+        },
+      });
     } catch (e) {
+      // Auto-cleanup on backend so stuck ghost session doesn't linger
+      if (createdSessionId) {
+        apiPost(`/live/${createdSessionId}/end`, {}).catch(() => {});
+      }
       const message =
         e instanceof ApiError
           ? e.message
@@ -490,16 +569,18 @@ export default function Studio() {
       /* ignore */
     }
     // Notify the backend so the session is marked as ended
-    if (sessionMeta?.session_id) {
+    const targetSessionId = sessionMeta?.session_id || existingLiveSession?.id;
+    if (targetSessionId) {
       try {
-        await apiPost(`/live/${sessionMeta.session_id}/end`, {});
+        await apiPost(`/live/${targetSessionId}/end`, {});
       } catch {
-        /* best-effort — session will expire on its own */
+        /* best-effort */
       }
     }
     setConnection(null);
     setLocalVideoTrack(null);
     setSessionMeta(null);
+    setExistingLiveSession(null);
     setToast({ message: "Broadcast ended.", tone: "info" });
     disconnectingRef.current = false;
   };
@@ -835,6 +916,26 @@ export default function Studio() {
             <>
               <Text style={styles.title}>Go live, stay connected.</Text>
 
+              {existingLiveSession && !connection && (
+                <View style={[styles.notice, { backgroundColor: "rgba(229, 9, 20, 0.08)", borderColor: colors.red, borderWidth: 1, marginBottom: 16 }]}>
+                  <Icon name="radio" color={colors.red} size={20} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={{ color: colors.ink, fontWeight: "700", fontSize: 13 }}>
+                      Active: {existingLiveSession.title}
+                    </Text>
+                    <Text style={{ color: colors.muted, fontSize: 11 }}>
+                      Currently visible on Home feed.
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={endExistingLiveSession}
+                    style={{ backgroundColor: colors.red, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
+                  >
+                    <Text style={{ color: "#FFFFFF", fontWeight: "700", fontSize: 12 }}>End</Text>
+                  </Pressable>
+                </View>
+              )}
+
               {connection ? (
                 <>
                   <LiveStage track={localVideoTrack} label={`LIVE · ${sessionMeta?.room?.slice(-6).toUpperCase() || ""}`} />
@@ -854,6 +955,33 @@ export default function Studio() {
                       Tap Start to request camera + mic and open a LiveKit room. Readers see it instantly under Live now.
                     </Text>
                   </View>
+
+                  {Platform.OS === "web" && typeof window !== "undefined" && !window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && (
+                    <View style={styles.insecureNotice}>
+                      <Icon name="videocam-outline" color="#D97706" size={20} />
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <Text style={styles.insecureTitle}>Webcam Notice for Chrome</Text>
+                        <Text style={styles.insecureText}>
+                          Chrome blocks physical webcams on HTTP IP addresses ({typeof window !== "undefined" ? window.location.host : ""}) and uses the animated field broadcast fallback.
+                          To use your computer's real camera, switch to localhost:
+                        </Text>
+                        <Pressable
+                          onPress={() => {
+                            if (typeof window !== "undefined") {
+                              window.location.href = window.location.href.replace(window.location.host, "localhost:8081");
+                            }
+                          }}
+                          style={styles.switchBtn}
+                        >
+                          <Icon name="link-outline" color="#FFFFFF" size={14} />
+                          <Text style={styles.switchBtnText}>Switch to http://localhost:8081</Text>
+                        </Pressable>
+                        <Text style={styles.insecureSub}>
+                          (On your Android phone app, your camera is always active directly.)
+                        </Text>
+                      </View>
+                    </View>
+                  )}
 
                   <TextInput
                     testID="reporter-live-title"
@@ -1241,4 +1369,46 @@ const createStyles = (colors: any) => StyleSheet.create({
   supporterRankText: { color: colors.ink, fontWeight: "800", fontSize: 13 },
   supporterName: { color: colors.ink, fontWeight: "800", fontSize: 14 },
   supporterTotal: { color: C.green, fontSize: 15, fontWeight: "800" },
+  insecureNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    backgroundColor: "rgba(217, 119, 6, 0.08)",
+    borderColor: "rgba(217, 119, 6, 0.35)",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14,
+  },
+  insecureTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#D97706",
+  },
+  insecureText: {
+    fontSize: 12,
+    color: colors.ink,
+    lineHeight: 17,
+  },
+  switchBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: "#D97706",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  switchBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  insecureSub: {
+    fontSize: 11,
+    color: colors.muted,
+    marginTop: 2,
+  },
 });

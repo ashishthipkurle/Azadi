@@ -21,6 +21,18 @@ LogBox.ignoreLogs([
   "FontObserver",
 ]);
 
+if (Platform.OS !== "web") {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { registerGlobals } = require("@livekit/react-native");
+    if (typeof registerGlobals === "function") {
+      registerGlobals();
+    }
+  } catch (e) {
+    console.warn("LiveKit globals registration:", e);
+  }
+}
+
 if (Platform.OS === "web" && typeof window !== "undefined") {
   const origOnError = window.onerror;
   window.onerror = function (message, source, lineno, colno, error) {

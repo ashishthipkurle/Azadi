@@ -719,26 +719,57 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
                     <Text style={styles.liveStripLabel}>LIVE NOW · {liveSessions.length}</Text>
                   </View>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-                    {liveSessions.map((s) => (
-                      <Pressable
-                        key={s.id}
-                        testID={`live-tile-${s.room}`}
-                        onPress={() =>
-                          router.push({
-                            pathname: `${routePrefix}/live/[room]` as any,
-                            params: { room: s.room, title: s.title, reporter: s.reporter_name },
-                          })
-                        }
-                        style={styles.liveTile}
-                      >
-                        <View style={styles.liveTilePill}>
-                          <View style={styles.liveDot} />
-                          <Text style={styles.liveTilePillText}>LIVE</Text>
-                        </View>
-                        <Text style={styles.liveTileTitle} numberOfLines={2}>{s.title}</Text>
-                        <Text style={styles.liveTileMeta}>{s.reporter_name}</Text>
-                      </Pressable>
-                    ))}
+                    {liveSessions.map((s) => {
+                      const isStreamOwner = Boolean(
+                        user &&
+                          (user.id === s.reporter_id ||
+                            user.name === s.reporter_name ||
+                            user.role === "admin")
+                      );
+                      return (
+                        <Pressable
+                          key={s.id}
+                          testID={`live-tile-${s.room}`}
+                          onPress={() =>
+                            router.push({
+                              pathname: `${routePrefix}/(tabs)/reels` as any,
+                              params: {
+                                tab: "live",
+                                initialRoom: s.room,
+                              },
+                            })
+                          }
+                          style={styles.liveTile}
+                        >
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                            <View style={styles.liveTilePill}>
+                              <View style={styles.liveDot} />
+                              <Text style={styles.liveTilePillText}>LIVE</Text>
+                            </View>
+                            {isStreamOwner && (
+                              <Pressable
+                                hitSlop={12}
+                                onPress={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    await apiPost(`/live/${s.id}/end`, {});
+                                    setLiveSessions((prev) => prev.filter((item) => item.id !== s.id));
+                                    setToast({ message: "Live broadcast ended.", tone: "info" });
+                                  } catch {
+                                    setLiveSessions((prev) => prev.filter((item) => item.id !== s.id));
+                                  }
+                                }}
+                                style={styles.liveTileCloseBtn}
+                              >
+                                <Icon name="close" color="#FFFFFF" size={13} />
+                              </Pressable>
+                            )}
+                          </View>
+                          <Text style={styles.liveTileTitle} numberOfLines={2}>{s.title}</Text>
+                          <Text style={styles.liveTileMeta}>{s.reporter_name}</Text>
+                        </Pressable>
+                      );
+                    })}
                   </ScrollView>
                 </View>
               ) : null}
@@ -1147,6 +1178,14 @@ const createStyles = (colors: any) =>
     liveTilePillText: { color: colors.surface, fontSize: 9, fontWeight: "800", letterSpacing: 1 },
     liveTileTitle: { color: colors.surface, fontSize: 15, fontWeight: "800", lineHeight: 20 },
     liveTileMeta: { color: "#B7BEC5", fontSize: 11 },
+    liveTileCloseBtn: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: "rgba(229, 9, 20, 0.9)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
     post: {
       backgroundColor: colors.surface,
       borderTopWidth: 1,

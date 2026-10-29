@@ -24,6 +24,7 @@ import { useTheme } from "@/src/hooks/use-theme";
 import { MediaPlayer } from "@/src/media-player";
 import { sharePost } from "@/src/share";
 import { ReelsCommentModal } from "@/src/shared/reels-comment-modal";
+import { LiveReelItem } from "@/src/shared/live-reel-item";
 import { Icon, Toast } from "@/src/ui";
 import { storage } from "@/src/utils/storage";
 import {
@@ -88,7 +89,12 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
   const router = useRouter();
-  const { initialPostId, navTimestamp } = useLocalSearchParams<{ initialPostId?: string; navTimestamp?: string }>();
+  const { initialPostId, navTimestamp, tab, initialRoom } = useLocalSearchParams<{
+    initialPostId?: string;
+    navTimestamp?: string;
+    tab?: string;
+    initialRoom?: string;
+  }>();
   const flatListRef = useRef<FlatList>(null);
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -115,7 +121,15 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"videos" | "live">("videos");
+  const [activeTab, setActiveTab] = useState<"videos" | "live">(tab === "live" ? "live" : "videos");
+  const [visibleLiveRoom, setVisibleLiveRoom] = useState<string | null>(initialRoom || null);
+
+  useEffect(() => {
+    if (tab === "live") {
+      setActiveTab("live");
+      if (initialRoom) setVisibleLiveRoom(initialRoom);
+    }
+  }, [tab, initialRoom]);
 
   // Track active visible post for single-item playback
   const [visiblePostId, setVisiblePostId] = useState<string | null>(initialPostId || null);
@@ -215,7 +229,18 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
 
       setPosts(finalOrderedPosts);
       dispatch(hydratePostsInteractions(finalOrderedPosts));
-      setLiveSessions(live);
+
+      let orderedSessions = live || [];
+      if (initialRoom) {
+        const found = orderedSessions.find((s) => s.room === initialRoom);
+        if (found) {
+          orderedSessions = [found, ...orderedSessions.filter((s) => s.room !== initialRoom)];
+        }
+      }
+      setLiveSessions(orderedSessions);
+      if (orderedSessions.length > 0) {
+        setVisibleLiveRoom((cur) => cur || orderedSessions[0].room);
+      }
 
       // Preserve currently playing video or set to first video
       if (finalOrderedPosts.length > 0) {
@@ -226,18 +251,21 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     } finally {
       setLoading(false);
     }
-  }, [initialPostId]);
+  }, [initialPostId, initialRoom]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Ensure visiblePostId is initialized if not set yet
+  // Ensure visiblePostId or visibleLiveRoom is initialized if not set yet
   useEffect(() => {
     if (activeTab === "videos" && !visiblePostId && posts.length > 0) {
       setVisiblePostId(posts[0].id);
     }
-  }, [activeTab, posts, visiblePostId]);
+    if (activeTab === "live" && !visibleLiveRoom && liveSessions.length > 0) {
+      setVisibleLiveRoom(liveSessions[0].room);
+    }
+  }, [activeTab, posts, liveSessions, visiblePostId, visibleLiveRoom]);
 
   const viewabilityConfigCallbackPairs = useRef([
     {
@@ -249,6 +277,9 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
           const primary = viewableItems[0]?.item;
           if (primary?.id) {
             setVisiblePostId(primary.id);
+          }
+          if (primary?.room) {
+            setVisibleLiveRoom(primary.room);
           }
         }
       },
@@ -275,27 +306,17 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
   const renderItem = ({ item }: { item: any }) => {
     if (activeTab === "live") {
       const live = item as LiveSession;
+      const isLiveActive = isFocused && isDocVisible && visibleLiveRoom === live.room;
       return (
-        <View style={[styles.reelContainer, { height: reelHeight, width: "100%" }]}>
-          <View style={[styles.videoPlaceholder, { backgroundColor: "#220000" }]}>
-            <Icon name="radio" color={colors.red} size={64} />
-            <Text style={[styles.videoTitle, { textAlign: "center", fontSize: 22, marginTop: 20 }]}>
-              {live.title}
-            </Text>
-            <Text style={[styles.videoBody, { textAlign: "center" }]}>{live.reporter_name}</Text>
-            <Pressable
-              style={[styles.liveButton, { marginTop: 20, paddingHorizontal: 24, paddingVertical: 12 }]}
-              onPress={() =>
-                router.push({
-                  pathname: `${routePrefix}/live/[room]` as any,
-                  params: { room: live.room, title: live.title, reporter: live.reporter_name },
-                })
-              }
-            >
-              <Text style={[styles.liveButtonText, { fontSize: 16 }]}>Watch Live Stream</Text>
-            </Pressable>
-          </View>
-        </View>
+        <LiveReelItem
+          session={live}
+          height={reelHeight}
+          isActive={isLiveActive}
+          onEndStream={() => {
+            setLiveSessions((prev) => prev.filter((s) => s.room !== live.room));
+            setToast({ message: "Live stream ended.", tone: "info" });
+          }}
+        />
       );
     }
 
