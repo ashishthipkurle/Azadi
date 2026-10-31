@@ -175,7 +175,7 @@ function VideoReportFeedCard({
         style={styles.videoFrameContainer}
         onPress={openReelFullScreen}
         accessibilityRole="button"
-        accessibilityLabel="Open video in full screen reels"
+        accessibilityLabel="Open video report in full screen"
       >
         {videoMedia?.playback_id ? (
           <MediaPlayer
@@ -465,6 +465,11 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
   useFocusEffect(
     useCallback(() => {
       syncFollowed().catch(() => {});
+      // Refresh live sessions on focus so ended broadcasts disappear from home strip
+      apiGet<LiveSession[]>("/live/sessions")
+        .then((live) => setLiveSessions(live || []))
+        .catch(() => {});
+
       if (tab === "following") {
         let url = `/feed/following${topic !== "All" ? `?topic=${topic}` : ""}`;
         if (selectedFollowingReporterId) {
@@ -491,9 +496,14 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
     });
   }, [tab, allPosts, followingPosts, trendingPosts]);
 
-  // Polling for real-time feed updates
+  // Polling for real-time feed updates & live sessions
   useEffect(() => {
     const interval = setInterval(async () => {
+      // Refresh live sessions list so ended broadcasts vanish automatically
+      apiGet<LiveSession[]>("/live/sessions")
+        .then((live) => setLiveSessions(live || []))
+        .catch(() => {});
+
       if (tab === "trending") return;
       const currentPosts = tab === "following" ? followingPosts : allPosts;
       if (currentPosts.length === 0) return;
@@ -510,7 +520,7 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
       } catch {
         // silent fail
       }
-    }, 60000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [tab, allPosts, followingPosts, selectedFollowingReporterId]);
 
@@ -752,11 +762,18 @@ export default function FeedScreen({ routePrefix = "/(reader)" }: { routePrefix?
                                 onPress={async (e) => {
                                   e.stopPropagation();
                                   try {
-                                    await apiPost(`/live/${s.id}/end`, {});
-                                    setLiveSessions((prev) => prev.filter((item) => item.id !== s.id));
+                                    await Promise.allSettled([
+                                      apiPost(`/live/${s.id || s.room}/end`, {}),
+                                      apiPost(`/live/${s.room}/end`, {}),
+                                    ]);
+                                    setLiveSessions((prev) =>
+                                      prev.filter((item) => (item.id || item.room) !== (s.id || s.room))
+                                    );
                                     setToast({ message: "Live broadcast ended.", tone: "info" });
                                   } catch {
-                                    setLiveSessions((prev) => prev.filter((item) => item.id !== s.id));
+                                    setLiveSessions((prev) =>
+                                      prev.filter((item) => (item.id || item.room) !== (s.id || s.room))
+                                    );
                                   }
                                 }}
                                 style={styles.liveTileCloseBtn}

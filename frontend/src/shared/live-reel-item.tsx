@@ -5,6 +5,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -17,7 +18,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { apiPost, ApiError } from "@/src/api";
+import { apiGet, apiPost, ApiError } from "@/src/api";
 import { LiveStage } from "@/src/live-stage";
 import {
   subscribeLive,
@@ -104,7 +105,7 @@ export function LiveReelItem({
 
   const [track, setTrack] = useState<RemoteVideoTrack | null>(null);
   const [status, setStatus] = useState<"connecting" | "waiting" | "live" | "ended" | "error">("connecting");
-  const [viewers, setViewers] = useState<number>(1);
+  const [viewers, setViewers] = useState<number>(0);
   const [connection, setConnection] = useState<LiveConnection | null>(null);
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [commentText, setCommentText] = useState("");
@@ -113,6 +114,33 @@ export function LiveReelItem({
   const [bookmarked, setBookmarked] = useState(false);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [ending, setEnding] = useState(false);
+
+  // Reporter profile & expandable description
+  const [reporterAvatar, setReporterAvatar] = useState<string | null>(() => {
+    if (user && user.id === session.reporter_id && (user as any).avatar_url) {
+      return (user as any).avatar_url;
+    }
+    return null;
+  });
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [showCommentBar, setShowCommentBar] = useState(false);
+  const commentInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (session.reporter_id) {
+      apiGet<{ name?: string; avatar_url?: string }>(`/users/${session.reporter_id}/basic`)
+        .then((data) => {
+          if (!cancelled && data?.avatar_url) {
+            setReporterAvatar(data.avatar_url);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [session.reporter_id]);
 
   // Streamer tools & Live Poll state
   const [cameraFacing, setCameraFacing] = useState<"user" | "environment">("user");
@@ -159,8 +187,13 @@ export function LiveReelItem({
         } catch {}
       }
 
+      // Broadcaster's viewers = remote participants (excludes the reporter themselves)
+      setViewers(currentActivePub.room?.remoteParticipants?.size || 0);
+
       const onPart = () => {
-        if (currentActivePub.room?.numParticipants) setViewers(currentActivePub.room.numParticipants);
+        if (currentActivePub.room) {
+          setViewers(currentActivePub.room.remoteParticipants?.size || 0);
+        }
       };
       const onData = (payload: Uint8Array, participant?: Participant) => {
         try {
@@ -177,14 +210,13 @@ export function LiveReelItem({
               timestamp: Date.now(),
             };
             setMessages((prev) => [...prev.slice(-25), newMsg]);
+          } else if (data.type === "stream_ended") {
+            setStatus("ended");
           } else if (data.type === "like") {
             spawnFloatingReaction("❤️");
             setLikeCount((c) => c + 1);
           } else if (data.type === "reaction") {
             spawnFloatingReaction(data.emoji || "❤️");
-            if (data.emoji === "❤️") {
-              setLikeCount((c) => c + 1);
-            }
           } else if (data.type === "poll_start") {
             setActivePoll(data.poll);
             setUserVotedIndex(null);
@@ -241,7 +273,7 @@ export function LiveReelItem({
         setConnection(conn);
         setStatus("waiting");
         if (conn.room.numParticipants > 0) {
-          setViewers(conn.room.numParticipants);
+          setViewers(Math.max(0, conn.room.numParticipants - 1));
         }
 
         const onTrackSubscribed = (t: any) => {
@@ -260,7 +292,22 @@ export function LiveReelItem({
 
         const onParticipant = () => {
           if (conn.room?.numParticipants) {
-            setViewers(conn.room.numParticipants);
+            setViewers(Math.max(0, conn.room.numParticipants - 1));
+          }
+        };
+
+        const onParticipantDisconnected = (p?: Participant) => {
+          if (conn.room?.numParticipants) {
+            setViewers(Math.max(0, conn.room.numParticipants - 1));
+          }
+          // If the broadcaster disconnected or no remote broadcaster remains
+          if (
+            p?.identity === session.reporter_id ||
+            p?.name === session.reporter_name ||
+            !conn.room?.remoteParticipants ||
+            conn.room.remoteParticipants.size === 0
+          ) {
+            setStatus("ended");
           }
         };
 
@@ -281,14 +328,13 @@ export function LiveReelItem({
                 timestamp: Date.now(),
               };
               setMessages((prev) => [...prev.slice(-25), newMsg]);
+            } else if (data.type === "stream_ended") {
+              setStatus("ended");
             } else if (data.type === "like") {
               spawnFloatingReaction("❤️");
               setLikeCount((c) => c + 1);
             } else if (data.type === "reaction") {
               spawnFloatingReaction(data.emoji || "❤️");
-              if (data.emoji === "❤️") {
-                setLikeCount((c) => c + 1);
-              }
             } else if (data.type === "poll_start") {
               setActivePoll(data.poll);
               setUserVotedIndex(null);
@@ -324,20 +370,42 @@ export function LiveReelItem({
           });
         } catch {}
 
+        // If broadcaster is not present when joining, verify backend state
+        if (!conn.room.remoteParticipants || conn.room.remoteParticipants.size === 0) {
+          setTimeout(async () => {
+            if (cancelled) return;
+            if (!conn.room?.remoteParticipants || conn.room.remoteParticipants.size === 0) {
+              try {
+                const sessions = await apiGet<LiveSession[]>("/live/sessions");
+                const stillLive = sessions.some((s) => s.room === session.room);
+                if (!stillLive) {
+                  setStatus("ended");
+                }
+              } catch {
+                setStatus("ended");
+              }
+            }
+          }, 3500);
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const lk = require("livekit-client");
         conn.room
           .on(lk.RoomEvent.TrackSubscribed, onTrackSubscribed)
           .on(lk.RoomEvent.TrackUnsubscribed, onTrackUnsubscribed)
           .on(lk.RoomEvent.ParticipantConnected, onParticipant)
-          .on(lk.RoomEvent.ParticipantDisconnected, onParticipant)
+          .on(lk.RoomEvent.ParticipantDisconnected, onParticipantDisconnected)
           .on(lk.RoomEvent.Disconnected, onDisconnected)
           .on(lk.RoomEvent.DataReceived, onDataReceived);
 
         disconnectRef.current = conn.disconnect;
-      } catch (e) {
+      } catch (e: any) {
         if (cancelled) return;
-        setStatus("error");
+        if (e?.status === 410 || (typeof e?.message === "string" && e.message.toLowerCase().includes("ended"))) {
+          setStatus("ended");
+        } else {
+          setStatus("error");
+        }
       }
     };
 
@@ -354,13 +422,29 @@ export function LiveReelItem({
   const handleEndStream = async () => {
     setEnding(true);
     try {
+      // 1. Broadcast stream_ended to all connected viewers in real time
+      const activeRoom = connection?.room || getActivePublisher()?.room;
+      if (activeRoom) {
+        try {
+          const payload = encodeLivePayload(JSON.stringify({ type: "stream_ended" }));
+          await activeRoom.localParticipant.publishData(payload as any, { reliable: true });
+        } catch {}
+      }
+
+      // 2. Mark stream ended in database for both target ID and room
       const targetId = session.id || session.room;
-      await apiPost(`/live/${targetId}/end`, {});
+      await Promise.allSettled([
+        apiPost(`/live/${targetId}/end`, {}),
+        apiPost(`/live/${session.room}/end`, {}),
+      ]);
+
+      // 3. Disconnect broadcaster and tear down tracks
       const activePub = getActivePublisher();
       if (activePub && activePub.room.name === session.room) {
         await activePub.disconnect();
       }
       if (disconnectRef.current) await disconnectRef.current();
+      setStatus("ended");
       onEndStream?.();
     } catch {
       onEndStream?.();
@@ -395,21 +479,29 @@ export function LiveReelItem({
 
   const handleSendReaction = async (emoji: string) => {
     spawnFloatingReaction(emoji);
-    if (emoji === "❤️") {
-      setLiked(true);
-      setLikeCount((c) => c + 1);
-    }
 
-    if (connection?.room) {
+    const activeRoom = connection?.room || getActivePublisher()?.room;
+    if (activeRoom) {
       try {
         const payload = encodeLivePayload(JSON.stringify({ type: "reaction", emoji }));
-        await connection.room.localParticipant.publishData(payload as any, { reliable: false });
+        await activeRoom.localParticipant.publishData(payload as any, { reliable: false });
       } catch {}
     }
   };
 
   const handleLike = () => {
-    handleSendReaction("❤️");
+    if (liked) return;
+    setLiked(true);
+    setLikeCount((c) => c + 1);
+    spawnFloatingReaction("❤️");
+
+    const activeRoom = connection?.room || getActivePublisher()?.room;
+    if (activeRoom) {
+      try {
+        const payload = encodeLivePayload(JSON.stringify({ type: "like" }));
+        activeRoom.localParticipant.publishData(payload as any, { reliable: true });
+      } catch {}
+    }
   };
 
   const handleSwitchCamera = async () => {
@@ -417,8 +509,13 @@ export function LiveReelItem({
       const nextFacing = cameraFacing === "user" ? "environment" : "user";
       const room = connection?.room || getActivePublisher()?.room;
       if (room) {
-        await toggleCameraFacing(room, track, nextFacing);
-        setCameraFacing(nextFacing);
+        let pubTrack = track;
+        if (!pubTrack && room.localParticipant?.videoTrackPublications) {
+          const pubs = Array.from(room.localParticipant.videoTrackPublications.values()) as any[];
+          pubTrack = pubs[0]?.track || null;
+        }
+        const resolvedFacing = await toggleCameraFacing(room, pubTrack, nextFacing);
+        setCameraFacing(resolvedFacing);
         // Refresh local track reference if swapped
         const pubs = room.localParticipant?.videoTrackPublications;
         if (pubs && pubs.size > 0) {
@@ -613,7 +710,7 @@ export function LiveReelItem({
         )}
       </View>
 
-      {/* 2. Top Stream Overlay (Live badge + Viewer count + Streamer controls) */}
+      {/* 2. Top Stream Overlay (Live badge + Viewer count) */}
       <View style={[styles.streamTopOverlay, { top: insets.top + 72 }]} pointerEvents="box-none">
         <View style={styles.badgesGroup}>
           <View style={styles.liveBadge}>
@@ -624,54 +721,6 @@ export function LiveReelItem({
             <Text style={styles.viewerBadgeText}>{formatViewers(viewers)}</Text>
           </View>
         </View>
-
-        {isOwner && (
-          <View style={styles.ownerControlsGroup}>
-            {/* Flip Camera */}
-            <Pressable
-              onPress={handleSwitchCamera}
-              style={styles.streamerToolBtn}
-              hitSlop={8}
-            >
-              <Icon name="camera-reverse-outline" color="#FFFFFF" size={17} />
-            </Pressable>
-
-            {/* Mute/Unmute Mic */}
-            <Pressable
-              onPress={handleToggleMic}
-              style={[styles.streamerToolBtn, micMuted && styles.streamerToolBtnActive]}
-              hitSlop={8}
-            >
-              <Icon
-                name={micMuted ? "mic-off-outline" : "mic-outline"}
-                color={micMuted ? "#FF3B30" : "#FFFFFF"}
-                size={17}
-              />
-            </Pressable>
-
-            {/* Live Poll button */}
-            <Pressable
-              onPress={() => setShowPollCreator(true)}
-              style={[styles.streamerToolBtn, activePoll?.active && styles.streamerToolBtnActive]}
-              hitSlop={8}
-            >
-              <Icon
-                name="stats-chart"
-                color={activePoll?.active ? "#4CAF50" : "#FFFFFF"}
-                size={16}
-              />
-            </Pressable>
-
-            {/* End Stream */}
-            <Pressable
-              onPress={handleEndStream}
-              disabled={ending}
-              style={styles.ownerEndPill}
-            >
-              <Text style={styles.ownerEndPillText}>{ending ? "Ending…" : "End Stream"}</Text>
-            </Pressable>
-          </View>
-        )}
       </View>
 
       {/* 2b. Interactive Live Poll Overlay (ABCD options) */}
@@ -748,27 +797,69 @@ export function LiveReelItem({
         </View>
       )}
 
-      {/* 3. Title & Reporter details (Bottom left) */}
+      {/* 3. Reporter details & Expandable Description (Bottom left) */}
       <View
         style={[
           styles.streamDetailsOverlay,
-          isOwner ? styles.streamDetailsOwner : styles.streamDetailsViewer,
+          isOwner
+            ? styles.streamDetailsOwner
+            : [
+                styles.streamDetailsViewer,
+                { bottom: showCommentBar ? 68 : 20, maxWidth: showCommentBar ? "74%" : "60%" },
+              ],
         ]}
-        pointerEvents="none"
+        pointerEvents="box-none"
       >
-        <Text style={styles.streamHeadline} numberOfLines={2}>
-          {session.title}
-        </Text>
-        <Text style={styles.streamReporter} numberOfLines={1}>
-          @{session.reporter_name}
-        </Text>
+        {/* Reporter profile avatar + name */}
+        <View style={styles.reporterProfileRow}>
+          {reporterAvatar ? (
+            <Image source={{ uri: reporterAvatar }} style={styles.reporterAvatar} />
+          ) : (
+            <View style={[styles.reporterAvatarFallback, { backgroundColor: colors.red }]}>
+              <Text style={styles.reporterAvatarLetter}>
+                {(session.reporter_name || "R").charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.reporterNameWrap}>
+            <View style={styles.reporterNameBadgeRow}>
+              <Text style={styles.reporterNameText} numberOfLines={1}>
+                @{session.reporter_name}
+              </Text>
+              <Icon name="checkmark-circle" color="#2196F3" size={14} />
+            </View>
+            <Text style={styles.reporterLiveTag}>REPORTER</Text>
+          </View>
+        </View>
+
+        {/* Expandable description section below the name */}
+        {session.title ? (
+          <Pressable
+            onPress={() => setDescExpanded((prev) => !prev)}
+            style={styles.descriptionContainer}
+            hitSlop={6}
+          >
+            <Text
+              style={styles.descriptionText}
+              numberOfLines={descExpanded ? undefined : 2}
+            >
+              {session.title}
+            </Text>
+            <Text style={styles.descriptionToggleText}>
+              {descExpanded ? "Show less" : "…more"}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {/* 4. Floating Live Chat Overlay */}
       <View
         style={[
           styles.chatOverlay,
-          isOwner ? styles.chatOverlayBroadcaster : styles.chatOverlayViewer,
+          isOwner
+            ? styles.chatOverlayBroadcaster
+            : [styles.chatOverlayViewer, { bottom: showCommentBar ? 154 : 110 }],
         ]}
         pointerEvents="box-none"
       >
@@ -803,32 +894,116 @@ export function LiveReelItem({
 
       {/* 5. Right Action Rail (Bookmark, Comment, Heart, Share) - ONLY for viewers */}
       {!isOwner && (
-        <View style={styles.actionRail} pointerEvents="box-none">
+        <View
+          style={[styles.actionRail, { bottom: 72 }]}
+          pointerEvents="box-none"
+        >
           <Pressable onPress={() => setBookmarked((b) => !b)} style={styles.railBtn}>
             <View style={styles.actionIconCircle}>
               <Icon name={bookmarked ? "bookmark" : "bookmark-outline"} color="#FFFFFF" size={24} />
             </View>
           </Pressable>
 
-          <Pressable onPress={() => chatListRef.current?.scrollToEnd({ animated: true })} style={styles.railBtn}>
-            <View style={styles.actionIconCircle}>
-              <Icon name="chatbubble-outline" color="#FFFFFF" size={24} />
+          {/* Comment button -> Toggles bottom comment input bar */}
+          <Pressable
+            onPress={() => {
+              setShowCommentBar((prev) => !prev);
+              setTimeout(() => {
+                chatListRef.current?.scrollToEnd({ animated: true });
+              }, 100);
+            }}
+            style={styles.railBtn}
+          >
+            <View style={[styles.actionIconCircle, showCommentBar && styles.actionIconCircleActive]}>
+              <Icon
+                name={showCommentBar ? "chatbubble" : "chatbubble-outline"}
+                color={showCommentBar ? colors.red : "#FFFFFF"}
+                size={24}
+              />
             </View>
             <Text style={styles.railCountText}>{messages.length}</Text>
           </Pressable>
 
+          {/* Single-use Like Heart */}
           <Pressable onPress={handleLike} style={styles.railBtn}>
-            <View style={styles.actionIconCircle}>
-              <Icon name={liked ? "heart" : "heart-outline"} color={liked ? "#FF2D55" : "#FFFFFF"} size={26} />
+            <View style={[styles.actionIconCircle, liked && styles.actionIconCircleLiked]}>
+              <Icon
+                name={liked ? "heart" : "heart-outline"}
+                color={liked ? "#FF2D55" : "#FFFFFF"}
+                size={26}
+              />
             </View>
-            <Text style={styles.railCountText}>{likeCount >= 1000 ? `${(likeCount / 1000).toFixed(1)}k` : likeCount}</Text>
+            <Text style={[styles.railCountText, liked && { color: "#FF2D55" }]}>
+              {likeCount >= 1000 ? `${(likeCount / 1000).toFixed(1)}k` : likeCount}
+            </Text>
           </Pressable>
 
+          {/* Share */}
           <Pressable onPress={handleShare} style={styles.railBtn}>
             <View style={styles.actionIconCircle}>
               <Icon name="arrow-redo-outline" color="#FFFFFF" size={26} />
             </View>
             <Text style={styles.railCountText}>Share</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* 5b. Right Action Rail - Broadcaster controls (Vertically on the right edge) */}
+      {isOwner && (
+        <View style={[styles.actionRail, { bottom: 72 }]} pointerEvents="box-none">
+          {/* Flip Camera */}
+          <Pressable onPress={handleSwitchCamera} style={styles.railBtn} hitSlop={8}>
+            <View style={styles.actionIconCircle}>
+              <Icon name="camera-reverse-outline" color="#FFFFFF" size={24} />
+            </View>
+            <Text style={styles.railCountText}>Flip</Text>
+          </Pressable>
+
+          {/* Mute/Unmute Mic */}
+          <Pressable onPress={handleToggleMic} style={styles.railBtn} hitSlop={8}>
+            <View style={[styles.actionIconCircle, micMuted && styles.actionIconCircleActive]}>
+              <Icon
+                name={micMuted ? "mic-off-outline" : "mic-outline"}
+                color={micMuted ? "#FF3B30" : "#FFFFFF"}
+                size={24}
+              />
+            </View>
+            <Text style={[styles.railCountText, micMuted && { color: "#FF3B30" }]}>
+              {micMuted ? "Muted" : "Mic"}
+            </Text>
+          </Pressable>
+
+          {/* Live Poll button */}
+          <Pressable
+            onPress={() => setShowPollCreator(true)}
+            style={styles.railBtn}
+            hitSlop={8}
+          >
+            <View style={[styles.actionIconCircle, activePoll?.active && styles.actionIconCirclePoll]}>
+              <Icon
+                name="stats-chart"
+                color={activePoll?.active ? "#4CAF50" : "#FFFFFF"}
+                size={22}
+              />
+            </View>
+            <Text style={[styles.railCountText, activePoll?.active && { color: "#4CAF50" }]}>
+              Poll
+            </Text>
+          </Pressable>
+
+          {/* End Stream */}
+          <Pressable
+            onPress={handleEndStream}
+            disabled={ending}
+            style={styles.railBtn}
+            hitSlop={8}
+          >
+            <View style={[styles.actionIconCircle, styles.actionIconCircleEnd]}>
+              <Icon name="power" color="#FFFFFF" size={22} />
+            </View>
+            <Text style={[styles.railCountText, { color: "#FF3B30" }]}>
+              {ending ? "Ending" : "End"}
+            </Text>
           </Pressable>
         </View>
       )}
@@ -870,35 +1045,53 @@ export function LiveReelItem({
         })}
       </View>
 
-      {/* 7. Bottom Comment Input Bar & Quick Reactions - ONLY for viewers */}
+      {/* 7. Bottom Bar: Emojis horizontally, plus Comment Input Bar when toggled */}
       {!isOwner && (
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.bottomBarWrap}
+          pointerEvents="box-none"
         >
-          <View style={styles.bottomBar}>
-            <View style={styles.commentInputWrap}>
-              <TextInput
-                value={commentText}
-                onChangeText={setCommentText}
-                placeholder="Add a comment..."
-                placeholderTextColor="#A0A0A0"
-                style={styles.commentInput}
-                onSubmitEditing={handleSendComment}
-                returnKeyType="send"
-              />
-              {commentText.trim().length > 0 && (
-                <Pressable onPress={handleSendComment} style={styles.sendBtn}>
-                  <Icon name="arrow-up-circle" color={colors.red} size={26} />
+          <View
+            style={[styles.bottomBar, !showCommentBar && { justifyContent: "flex-end" }]}
+            pointerEvents="box-none"
+          >
+            {showCommentBar && (
+              <View style={styles.commentInputWrap}>
+                <TextInput
+                  ref={commentInputRef}
+                  value={commentText}
+                  onChangeText={setCommentText}
+                  placeholder="Add a comment…"
+                  placeholderTextColor="#A0A0A0"
+                  style={styles.commentInput}
+                  onSubmitEditing={handleSendComment}
+                  returnKeyType="send"
+                  autoFocus
+                />
+                {commentText.trim().length > 0 && (
+                  <Pressable onPress={handleSendComment} style={styles.sendBtn} hitSlop={8}>
+                    <Icon name="arrow-up-circle" color={colors.red} size={28} />
+                  </Pressable>
+                )}
+                <Pressable
+                  onPress={() => setShowCommentBar(false)}
+                  style={styles.closeCommentInputBtn}
+                  hitSlop={8}
+                >
+                  <Icon name="close" color="#FFFFFF" size={18} />
                 </Pressable>
-              )}
-            </View>
-            <View style={styles.quickReactions}>
+              </View>
+            )}
+
+            {/* Horizontal Quick Reactions: ❤️, 🔥, 👏 */}
+            <View style={styles.quickReactions} pointerEvents="auto">
               {["❤️", "🔥", "👏"].map((emoji) => (
                 <Pressable
                   key={emoji}
                   onPress={() => handleSendReaction(emoji)}
                   style={styles.quickReactionBtn}
+                  hitSlop={8}
                 >
                   <Text style={styles.quickReactionEmoji}>{emoji}</Text>
                 </Pressable>
@@ -1117,32 +1310,90 @@ const createStyles = (colors: any) =>
     },
     streamDetailsOverlay: {
       position: "absolute",
-      left: 16,
-      zIndex: 10,
-      gap: 3,
+      left: 14,
+      zIndex: 18,
+      gap: 6,
+      maxWidth: "74%",
     },
     streamDetailsOwner: {
-      bottom: 60,
-      right: 20,
+      bottom: 24,
     },
     streamDetailsViewer: {
-      bottom: 120,
-      right: 80,
+      bottom: 28,
     },
-    streamHeadline: {
+    reporterProfileRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    reporterAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      borderWidth: 1.5,
+      borderColor: "#FFFFFF",
+      backgroundColor: "#222",
+    },
+    reporterAvatarFallback: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: "#FFFFFF",
+    },
+    reporterAvatarLetter: {
       color: "#FFFFFF",
       fontSize: 16,
+      fontWeight: "800",
+    },
+    reporterNameWrap: {
+      justifyContent: "center",
+      gap: 2,
+    },
+    reporterNameBadgeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+    },
+    reporterNameText: {
+      color: "#FFFFFF",
+      fontSize: 14,
       fontWeight: "700",
-      textShadowColor: "rgba(0,0,0,0.8)",
+      textShadowColor: "rgba(0,0,0,0.85)",
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 4,
+    },
+    reporterLiveTag: {
+      color: "rgba(255, 255, 255, 0.75)",
+      fontSize: 10,
+      fontWeight: "700",
+      letterSpacing: 0.8,
+      textTransform: "uppercase",
+    },
+    descriptionContainer: {
+      marginTop: 2,
+      backgroundColor: "rgba(0, 0, 0, 0.4)",
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      alignSelf: "flex-start",
+      maxWidth: "100%",
+    },
+    descriptionText: {
+      color: "#F0F0F0",
+      fontSize: 13,
+      lineHeight: 18,
+      textShadowColor: "rgba(0,0,0,0.85)",
       textShadowOffset: { width: 0, height: 1 },
       textShadowRadius: 3,
     },
-    streamReporter: {
-      color: "rgba(255,255,255,0.75)",
-      fontSize: 13,
-      textShadowColor: "rgba(0,0,0,0.8)",
-      textShadowOffset: { width: 0, height: 1 },
-      textShadowRadius: 3,
+    descriptionToggleText: {
+      color: "#64B5F6",
+      fontSize: 12,
+      fontWeight: "700",
+      marginTop: 2,
     },
     chatOverlay: {
       position: "absolute",
@@ -1155,9 +1406,9 @@ const createStyles = (colors: any) =>
       maxHeight: 130,
     },
     chatOverlayViewer: {
-      bottom: 60,
+      bottom: 110,
       right: 80,
-      maxHeight: 170,
+      maxHeight: 160,
     },
     chatBroadcasterPlaceholder: {
       flexDirection: "row",
@@ -1218,9 +1469,9 @@ const createStyles = (colors: any) =>
     actionRail: {
       position: "absolute",
       right: 12,
-      bottom: 70,
+      bottom: 28,
       alignItems: "center",
-      gap: 16,
+      gap: 14,
       zIndex: 25,
     },
     railBtn: {
@@ -1232,9 +1483,29 @@ const createStyles = (colors: any) =>
       width: 44,
       height: 44,
       borderRadius: 22,
-      backgroundColor: "rgba(0,0,0,0.4)",
+      backgroundColor: "rgba(0,0,0,0.45)",
       alignItems: "center",
       justifyContent: "center",
+    },
+    actionIconCircleActive: {
+      backgroundColor: "rgba(229, 9, 20, 0.4)",
+      borderWidth: 1.5,
+      borderColor: "#E50914",
+    },
+    actionIconCircleLiked: {
+      backgroundColor: "rgba(255, 45, 85, 0.25)",
+      borderWidth: 1.5,
+      borderColor: "#FF2D55",
+    },
+    actionIconCircleEnd: {
+      backgroundColor: "rgba(229, 9, 20, 0.75)",
+      borderWidth: 1.5,
+      borderColor: "#E50914",
+    },
+    actionIconCirclePoll: {
+      backgroundColor: "rgba(76, 175, 80, 0.35)",
+      borderWidth: 1.5,
+      borderColor: "#4CAF50",
     },
     railCountText: {
       color: "#FFFFFF",
@@ -1245,7 +1516,7 @@ const createStyles = (colors: any) =>
     floatingHeartsCanvas: {
       position: "absolute",
       right: 16,
-      bottom: 120,
+      bottom: 70,
       width: 60,
       height: 280,
       zIndex: 30,
@@ -1257,26 +1528,26 @@ const createStyles = (colors: any) =>
     },
     bottomBarWrap: {
       position: "absolute",
-      left: 0,
-      right: 0,
-      bottom: 8,
+      left: 12,
+      right: 12,
+      bottom: 12,
       zIndex: 35,
     },
     bottomBar: {
       flexDirection: "row",
       alignItems: "center",
-      paddingHorizontal: 12,
+      gap: 8,
     },
     commentInputWrap: {
       flex: 1,
       flexDirection: "row",
       alignItems: "center",
-      backgroundColor: "rgba(0, 0, 0, 0.55)",
+      backgroundColor: "rgba(0, 0, 0, 0.75)",
       borderRadius: 22,
       borderWidth: 1,
-      borderColor: "rgba(255, 255, 255, 0.2)",
-      paddingHorizontal: 14,
-      height: 40,
+      borderColor: "rgba(255, 255, 255, 0.25)",
+      paddingHorizontal: 12,
+      height: 42,
     },
     commentInput: {
       flex: 1,
@@ -1285,22 +1556,25 @@ const createStyles = (colors: any) =>
       paddingVertical: 6,
     },
     sendBtn: {
-      paddingLeft: 6,
+      paddingHorizontal: 4,
+    },
+    closeCommentInputBtn: {
+      paddingHorizontal: 4,
+      paddingVertical: 4,
     },
     quickReactions: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
-      marginLeft: 8,
     },
     quickReactionBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: "rgba(0, 0, 0, 0.45)",
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: "rgba(0, 0, 0, 0.55)",
       alignItems: "center",
       justifyContent: "center",
-      borderWidth: 0.5,
+      borderWidth: 1,
       borderColor: "rgba(255, 255, 255, 0.2)",
     },
     quickReactionEmoji: {

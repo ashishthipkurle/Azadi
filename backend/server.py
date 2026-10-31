@@ -1,1694 +1,6913 @@
 from datetime import datetime, timedelta, timezone
+
+
+
 from pathlib import Path
+
+
+
 from typing import Optional
+
+
+
 import hashlib
+
+
+
 import hmac
+
+
+
 import json
+
+
+
 import logging
+
+
+
 import os
+
+
+
 import uuid
 
+
+
+
+
+
+
 import httpx
+
+
+
 import jwt
+
+
+
 import razorpay
+
+
+
 from dotenv import load_dotenv
+
+
+
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+
+
+
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+
+
 from livekit import api as livekit_api
+
+
+
 from pydantic import BaseModel, Field
+
+
+
 from pwdlib import PasswordHash
+
+
+
 from starlette.middleware.cors import CORSMiddleware
 
+
+
+
+
+
+
 import database as db
+
+
+
 from cryptography.fernet import Fernet
 
+
+
+
+
+
+
 ROOT_DIR = Path(__file__).parent
+
+
+
 load_dotenv(ROOT_DIR / ".env")
 
+
+
+
+
+
+
 backend_fernet = None
+
+
+
 if os.environ.get("BACKEND_ENCRYPTION_KEY"):
+
+
+
     backend_fernet = Fernet(os.environ["BACKEND_ENCRYPTION_KEY"].encode())
+
+
+
 app = FastAPI(title="Azadi API")
 
+
+
+
+
+
+
 app.add_middleware(
+
+
+
     CORSMiddleware,
+
+
+
     allow_origins=["*"],
+
+
+
     allow_credentials=True,
+
+
+
     allow_methods=["*"],
+
+
+
     allow_headers=["*"],
+
+
+
 )
 
+
+
+
+
+
+
 api_router = APIRouter(prefix="/api")
+
+
+
 bearer = HTTPBearer(auto_error=False)
+
+
+
 password_hash = PasswordHash.recommended()
 
+
+
+
+
+
+
 INTEGRATION_HINTS = {
+
+
+
     "MUX_TOKEN_ID": "Media uploads",
+
+
+
     "MUX_TOKEN_SECRET": "Media uploads",
+
+
+
     "MUX_WEBHOOK_SECRET": "Media uploads",
+
+
+
     "LIVEKIT_URL": "Live streaming",
+
+
+
     "LIVEKIT_API_KEY": "Live streaming",
+
+
+
     "LIVEKIT_API_SECRET": "Live streaming",
+
+
+
     "RAZORPAY_KEY_ID": "₹7 support payments",
+
+
+
     "RAZORPAY_KEY_SECRET": "₹7 support payments",
+
+
+
     "RAZORPAY_WEBHOOK_SECRET": "₹7 support payments",
+
+
+
 }
 
 
+
+
+
+
+
+
+
+
+
 def now() -> str:
+
+
+
     return datetime.now(timezone.utc).isoformat()
 
 
+
+
+
+
+
+
+
+
+
 def jwt_secret() -> str:
+
+
+
     value = os.getenv("JWT_SECRET")
+
+
+
     if not value:
+
+
+
         raise HTTPException(503, "Authentication is not configured. Add JWT_SECRET to backend/.env")
+
+
+
     return value
 
 
+
+
+
+
+
+
+
+
+
 def get_env_var(key: str, default: Optional[str] = None) -> Optional[str]:
+
+
+
     val = os.getenv(key)
+
+
+
     if val:
+
+
+
         return val
+
+
+
     aliases = {
+
+
+
         "MUX_TOKEN_ID": ["Token ID", "TOKEN_ID", "MUX_TOKEN", "MUX_ID"],
+
+
+
         "MUX_TOKEN_SECRET": ["Secret Key", "TOKEN_SECRET", "MUX_SECRET", "MUX_KEY"],
+
+
+
         "LIVEKIT_URL": ["LiveKit URL", "LIVEKIT_HOST"],
+
+
+
         "LIVEKIT_API_KEY": ["LiveKit API Key"],
+
+
+
         "LIVEKIT_API_SECRET": ["LiveKit Secret", "LiveKit API Secret"],
+
+
+
     }
+
+
+
     for alias in aliases.get(key, []):
+
+
+
         val = os.getenv(alias)
+
+
+
         if val:
+
+
+
             return val
+
+
+
     return default
 
 
+
+
+
+
+
+
+
+
+
 def provider_required(*keys: str):
+
+
+
     missing = [key for key in keys if not get_env_var(key)]
+
+
+
     if missing:
+
+
+
         feature = INTEGRATION_HINTS.get(missing[0], "This feature")
+
+
+
         raise HTTPException(503, f"{feature} is coming soon — add {', '.join(missing)} to backend/.env")
 
 
+
+
+
+
+
+
+
+
+
 class Register(BaseModel):
+
+
+
     name: str = Field(min_length=2, max_length=80)
+
+
+
     email: str
+
+
+
     password: str = Field(min_length=6, max_length=128)
+
+
+
     role: str = "client"
 
 
+
+
+
+
+
+
+
+
+
 class Login(BaseModel):
+
+
+
     email: str
+
+
+
     password: str
 
 
+
+
+
+
+
+
+
+
+
 class PostMedia(BaseModel):
+
+
+
     kind: str  # "image" | "video"
+
+
+
     playback_id: Optional[str] = None
+
+
+
     asset_id: Optional[str] = None
+
+
+
     url: Optional[str] = None
+
+
+
     upload_id: Optional[str] = None
 
 
+
+
+
+
+
+
+
+
+
 class PostCreate(BaseModel):
+
+
+
     title: str
+
+
+
     body: str
+
+
+
     kind: str = "dispatch"
+
+
+
     location: str = "On the ground"
+
+
+
     media: list[PostMedia] = []
 
 
+
+
+
+
+
+
+
+
+
 class SupportCreate(BaseModel):
+
+
+
     reporter_id: str
+
+
+
     amount: int = 7
+
+
+
     interval: str = "once"  # "once" | "monthly"
 
 
+
+
+
+
+
+
+
+
+
 class ReportCreate(BaseModel):
+
+
+
     post_id: str
+
+
+
     reason: str
+
+
+
     note: str = ""
 
 
+
+
+
+
+
+
+
+
+
 class LiveCreate(BaseModel):
+
+
+
     title: str
+
+
+
     room: Optional[str] = None
 
 
+
+
+
+
+
+
+
+
+
 class UploadCreate(BaseModel):
+
+
+
     filename: str
+
+
+
     content_type: str
 
 
+
+
+
+
+
+
+
+
+
 class BookmarkCreate(BaseModel):
+
+
+
     post_id: str
+
+
+
+
+
+
+
+
+
 
 
 class CommentCreate(BaseModel):
+
+
+
     body: str = Field(min_length=1, max_length=1200)
+
+
+
     parent_id: Optional[str] = None
 
 
+
+
+
+
+
+
+
+
+
 class LikeAction(BaseModel):
+
+
+
     post_id: str
+
+
+
     liked: bool
 
 
+
+
+
+
+
+
+
+
+
 class BatchLikesPayload(BaseModel):
+
+
+
     actions: list[LikeAction]
 
 
+
+
+
+
+
+
+
+
+
 class Message(BaseModel):
+
+
+
     id: str
+
+
+
     sender_id: str
+
+
+
     receiver_id: str
+
+
+
     body: str
+
+
+
     read: bool
+
+
+
     created_at: str
 
 
+
+
+
+
+
+
+
+
+
 class MessageCreate(BaseModel):
+
+
+
     body: str
+
+
+
     encrypted: bool = False
 
 
+
+
+
+
+
+
+
+
+
 def _strip_keys(row: dict | None, keys: list[str]) -> dict | None:
+
+
+
     """Remove unwanted keys from a dict (replaces Mongo projection {\"_id\": 0, \"password_hash\": 0})."""
+
+
+
     if row is None:
+
+
+
         return None
+
+
+
     return {k: v for k, v in row.items() if k not in keys}
 
 
+
+
+
+
+
+
+
+
+
 def public_user(user: dict) -> dict:
+
+
+
     return {"id": user["id"], "name": user["name"], "email": user["email"], "role": user["role"], "verified": user.get("verified", False)}
 
 
+
+
+
+
+
+
+
+
+
 async def notify(
+
+
+
     recipient_id: str,
+
+
+
     kind: str,
+
+
+
     actor: dict,
+
+
+
     message: str,
+
+
+
     subject_id: Optional[str] = None,
+
+
+
     subject_kind: Optional[str] = None,
+
+
+
 ):
+
+
+
     """Insert a single notification row. Silently no-ops if the caller is the
+
+
+
     recipient (people don't need to be pinged about their own actions)."""
+
+
+
     if recipient_id == actor.get("id"):
+
+
+
         return
+
+
+
     await db.insert_one("notifications", {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "recipient_id": recipient_id,
+
+
+
         "kind": kind,
+
+
+
         "actor_id": actor.get("id"),
+
+
+
         "actor_name": actor.get("name"),
+
+
+
         "subject_id": subject_id,
+
+
+
         "subject_kind": subject_kind,
+
+
+
         "message": message,
+
+
+
         "read": False,
+
+
+
         "created_at": now(),
+
+
+
     })
+    # Real-time Expo push notification delivered even if app is closed/in background
+    try:
+        import push
+        title_map = {
+            "follow": "New Follower",
+            "post": f"New Report from {actor.get('name', 'Azadi')}",
+            "live": f"🔴 {actor.get('name', 'Reporter')} is LIVE",
+            "message": f"Message from {actor.get('name', 'Someone')}",
+        }
+        push_title = title_map.get(kind, f"Azadi · {actor.get('name', 'Update')}")
+        push_data = {
+            "kind": kind,
+            "subject_id": subject_id,
+            "subject_kind": subject_kind,
+            "actor_id": actor.get("id"),
+        }
+        asyncio.create_task(push.send_push_to_user(recipient_id, push_title, message, push_data))
+    except Exception as e:
+        logging.error(f"Failed to dispatch push notification: {e}")
+
+
+
+
+
+
+
+
+
 
 
 def token_for(user: dict) -> str:
+
+
+
     issued = datetime.now(timezone.utc)
+
+
+
     return jwt.encode({"sub": user["id"], "role": user["role"], "iat": issued, "exp": issued + timedelta(days=7)}, jwt_secret(), algorithm="HS256")
 
 
+
+
+
+
+
+
+
+
+
 async def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
+
+
+
     if not credentials:
+
+
+
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+
+
+
     try:
+
+
+
         claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
         user = await db.find_one("users", {"id": claims["sub"], "disabled": False})
+
+
+
         if not user or user["role"] != claims.get("role"):
+
+
+
             raise ValueError("user changed")
+
+
+
         user = _strip_keys(user, ["password_hash"])
+
+
+
         return user
+
+
+
     except HTTPException:
+
+
+
         raise
+
+
+
     except Exception as exc:
+
+
+
         logging.info("auth rejected: %s", exc)
+
+
+
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
 
 
+
+
+
+
+
+
+
+
+
 async def optional_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Optional[dict]:
+
+
+
     if not credentials:
+
+
+
         return None
+
+
+
     try:
+
+
+
         claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
         user = await db.find_one("users", {"id": claims["sub"], "disabled": False})
+
+
+
         return _strip_keys(user, ["password_hash"]) if user else None
+
+
+
     except Exception:
+
+
+
         return None
+
+
+
+
+
+
+
+
+
 
 
 async def _enrich_posts_interaction(posts: list[dict], user: Optional[dict] = None) -> list[dict]:
+
+
+
     if not posts:
+
+
+
         return posts
+
+
+
     post_ids = [p["id"] for p in posts if p.get("id")]
+
+
+
     if not post_ids:
+
+
+
         return posts
+
+
+
+
+
+
 
     my_liked_set = set()
+
+
+
     if user and user.get("id"):
+
+
+
         try:
+
+
+
             my_likes = await db.find_many("likes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+
+
+
             my_liked_set = {row["post_id"] for row in my_likes}
+
+
+
         except Exception as e:
+
+
+
             logging.warning("Error fetching user likes: %s", e)
 
+
+
+
+
+
+
     for p in posts:
+
+
+
         p["like_count"] = p.get("like_count", 0) or 0
+
+
+
         p["comment_count"] = p.get("comment_count", 0) or 0
+
+
+
         p["liked"] = p["id"] in my_liked_set if user else False
+
+
+
+
+
+
 
     return posts
 
 
+
+
+
+
+
+
+
+
+
 def require_roles(*roles: str):
+
+
+
     async def dependency(user: dict = Depends(current_user)) -> dict:
+
+
+
         if user["role"] not in roles:
+
+
+
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
+
+
+
         return user
+
+
+
     return dependency
 
 
+
+
+
+
+
+
+
+
+
 async def seed_data():
+
+
+
     # Admin seed
+
+
+
     if not await db.find_one("users", {"email": "admin@freepress.in"}):
+
+
+
         await db.insert_one("users", {
+
+
+
             "id": str(uuid.uuid4()),
+
+
+
             "name": "Platform Admin",
+
+
+
             "email": "admin@freepress.in",
+
+
+
             "role": "admin",
+
+
+
             "password_hash": password_hash.hash("admin123"),
+
+
+
             "verified": True,
+
+
+
             "created_at": now(),
+
+
+
             "disabled": False,
+
+
+
         })
+
+
+
     # Demo reporter seed (for the feed to have a real author)
+
+
+
     reporter = await db.find_one("users", {"email": "rhea@freepress.in"})
+
+
+
     if not reporter:
+
+
+
         reporter_id = str(uuid.uuid4())
+
+
+
         await db.insert_one("users", {
+
+
+
             "id": reporter_id,
+
+
+
             "name": "Rhea Iyer",
+
+
+
             "email": "rhea@freepress.in",
+
+
+
             "role": "reporter",
+
+
+
             "password_hash": password_hash.hash("reporter123"),
+
+
+
             "verified": True,
+
+
+
             "beat": "Climate & civic life",
+
+
+
             "location": "Bihar",
+
+
+
             "followers": 12400,
+
+
+
             "created_at": now(),
+
+
+
             "disabled": False,
+
+
+
         })
+
+
+
     else:
+
+
+
         reporter_id = reporter["id"]
+
+
+
     # Demo client seed
+
+
+
     if not await db.find_one("users", {"email": "reader@freepress.in"}):
+
+
+
         await db.insert_one("users", {
+
+
+
             "id": str(uuid.uuid4()),
+
+
+
             "name": "Curious Reader",
+
+
+
             "email": "reader@freepress.in",
+
+
+
             "role": "client",
+
+
+
             "password_hash": password_hash.hash("reader123"),
+
+
+
             "verified": False,
+
+
+
             "created_at": now(),
+
+
+
             "disabled": False,
+
+
+
         })
+
+
+
+
+
+
+
+
+
 
 
 @app.on_event("startup")
+
+
+
 async def startup():
+
+
+
     await db.init_db()
+
+
+
     await seed_data()
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/health")
+
+
+
 async def health():
+
+
+
     return {"status": "ok", "time": now()}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/auth/register")
+
+
+
 async def register(payload: Register):
+
+
+
     role = payload.role if payload.role in {"client", "reporter"} else "client"
+
+
+
     email = payload.email.strip().lower()
+
+
+
     if await db.find_one("users", {"email": email}):
+
+
+
         raise HTTPException(409, "An account with this email already exists")
+
+
+
     user = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "name": payload.name.strip(),
+
+
+
         "email": email,
+
+
+
         "role": role,
+
+
+
         "password_hash": password_hash.hash(payload.password),
+
+
+
         "verified": False,
+
+
+
         "created_at": now(),
+
+
+
         "disabled": False,
+
+
+
     }
+
+
+
     await db.insert_one("users", user)
+
+
+
     return {"access_token": token_for(user), "token_type": "bearer", "user": public_user(user)}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/auth/login")
+
+
+
 async def login(payload: Login):
+
+
+
     user = await db.find_one("users", {"email": payload.email.strip().lower()})
+
+
+
     if not user or not password_hash.verify(payload.password, user["password_hash"]):
+
+
+
         raise HTTPException(401, "Invalid email or password")
+
+
+
     if user.get("disabled"):
+
+
+
         raise HTTPException(403, "This account has been disabled by an admin")
+
+
+
     return {"access_token": token_for(user), "token_type": "bearer", "user": public_user(user)}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/auth/me")
+
+
+
 async def me(user: dict = Depends(current_user)):
+
+
+
     following_count = await db.count("follows", {"supporter_id": user["id"]})
+
+
+
     return public_user(user) | {"following": following_count, "friends": user.get("friends", 0)}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/feed")
+
+
+
 async def feed(
+
+
+
     kind: Optional[str] = None,
+
+
+
     topic: Optional[str] = None,
+
+
+
     before: Optional[str] = None,
+
+
+
     since: Optional[str] = None,
+
+
+
     user: Optional[dict] = Depends(optional_user)
+
+
+
 ):
+
+
+
     filters = {}
+
+
+
     if kind:
+
+
+
         filters["kind"] = kind
+
+
+
     if topic and topic != "All":
+
+
+
         filters["topic"] = topic
+
+
+
     if before:
+
+
+
         filters["created_at"] = {"$lt": before}
+
+
+
     elif since:
+
+
+
         filters["created_at"] = {"$gt": since}
+
+
+
         
+
+
+
     posts = await db.find_many("posts", filters, order_by="created_at", desc=True, limit=50)
+
+
+
     for p in posts:
+
+
+
         if isinstance(p.get("media"), str):
+
+
+
             try:
+
+
+
                 p["media"] = json.loads(p["media"])
+
+
+
             except Exception:
+
+
+
                 p["media"] = []
+
+
+
     return await _enrich_posts_interaction(posts, user)
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/feed/following")
+
+
+
 async def feed_following(
+
+
+
     user: dict = Depends(current_user), 
+
+
+
     topic: Optional[str] = None,
+
+
+
     reporter_id: Optional[str] = None,
+
+
+
     before: Optional[str] = None, 
+
+
+
     since: Optional[str] = None
+
+
+
 ):
+
+
+
     if reporter_id:
+
+
+
         ids = [reporter_id]
+
+
+
     else:
+
+
+
         follows = await db.find_many("follows", {"supporter_id": user["id"]})
+
+
+
         ids = [row["reporter_id"] for row in follows]
+
+
+
         
+
+
+
     if not ids:
+
+
+
         return []
+
+
+
         
+
+
+
     filters = {"reporter_id": {"$in": ids}}
+
+
+
     if topic and topic != "All":
+
+
+
         filters["topic"] = topic
+
+
+
     if before:
+
+
+
         filters["created_at"] = {"$lt": before}
+
+
+
     elif since:
+
+
+
         filters["created_at"] = {"$gt": since}
+
+
+
         
+
+
+
     posts = await db.find_many(
+
+
+
         "posts",
+
+
+
         filters,
+
+
+
         order_by="created_at",
+
+
+
         desc=True,
+
+
+
         limit=100,
+
+
+
     )
+
+
+
     for p in posts:
+
+
+
         if isinstance(p.get("media"), str):
+
+
+
             try:
+
+
+
                 p["media"] = json.loads(p["media"])
+
+
+
             except Exception:
+
+
+
                 p["media"] = []
+
+
+
     return await _enrich_posts_interaction(posts, user)
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/feed/trending")
+
+
+
 async def feed_trending(topic: Optional[str] = None, user: Optional[dict] = Depends(optional_user)):
+
+
+
     """Rank posts by (reads + supports*3) in the past 24 hours.
+
+
+
     Support counts more than a read because it's a stronger signal, but we
+
+
+
     don't allow paid promotion to influence ranking beyond genuine reader
+
+
+
     interest."""
+
+
+
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
+
+
+
+
+
+
     # Read counts via RPC
+
+
+
     read_counts: dict[str, int] = {}
+
+
+
     read_rows = await db.rpc("read_counts_since", {"cutoff": cutoff})
+
+
+
     for row in read_rows:
+
+
+
         read_counts[row["post_id"]] = row["count"]
 
+
+
+
+
+
+
     # Support counts via RPC
+
+
+
     support_counts: dict[str, int] = {}
+
+
+
     support_rows = await db.rpc("support_counts_since", {"cutoff": cutoff})
+
+
+
     for row in support_rows:
+
+
+
         support_counts[row["reporter_id"]] = row["count"]
 
+
+
+
+
+
+
     posts = await db.find_many("posts", {"created_at": {"$gte": cutoff}}, limit=200)
+
+
+
     # Include any older post that got engagement in the window too.
+
+
+
     if read_counts:
+
+
+
         engaged_ids = list(read_counts.keys())
+
+
+
         older = await db.find_many(
+
+
+
             "posts",
+
+
+
             {"id": {"$in": engaged_ids}, "created_at": {"$lt": cutoff}},
+
+
+
             limit=200,
+
+
+
         )
+
+
+
         seen = {p["id"] for p in posts}
+
+
+
         for p in older:
+
+
+
             if p["id"] not in seen:
+
+
+
                 posts.append(p)
 
+
+
+
+
+
+
     def score(post: dict) -> int:
+
+
+
         return read_counts.get(post["id"], 0) + support_counts.get(post["reporter_id"], 0) * 3
 
+
+
+
+
+
+
     ranked = sorted(posts, key=lambda p: (score(p), p["created_at"]), reverse=True)
+
+
+
     for p in ranked:
+
+
+
         if isinstance(p.get("media"), str):
+
+
+
             try:
+
+
+
                 p["media"] = json.loads(p["media"])
+
+
+
             except Exception:
+
+
+
                 p["media"] = []
+
+
+
     enriched = await _enrich_posts_interaction(ranked[:40], user)
+
+
+
     return [{**p, "trending_score": score(p), "reads_24h": read_counts.get(p["id"], 0)} for p in enriched]
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/posts/{post_id}/read")
+
+
+
 async def mark_read(post_id: str, user: dict = Depends(current_user)):
+
+
+
     """Record a read for trending. De-duped per (viewer, post, day) so refresh
+
+
+
     spam doesn't skew the ranking."""
+
+
+
     if not await db.find_one("posts", {"id": post_id}):
+
+
+
         raise HTTPException(404, "Post not found")
+
+
+
     day = datetime.now(timezone.utc).date().isoformat()
+
+
+
     key = f"{post_id}:{user['id']}:{day}"
+
+
+
     existing = await db.find_one("reads", {"key": key})
+
+
+
     if existing:
+
+
+
         return {"ok": True, "new": False}
+
+
+
     await db.insert_one("reads", {
+
+
+
         "key": key,
+
+
+
         "post_id": post_id,
+
+
+
         "viewer_id": user["id"],
+
+
+
         "created_at": now(),
+
+
+
     })
+
+
+
     return {"ok": True, "new": True}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/bookmarks")
+
+
+
 async def create_bookmark(payload: BookmarkCreate, user: dict = Depends(current_user)):
+
+
+
     if not await db.find_one("posts", {"id": payload.post_id}):
+
+
+
         raise HTTPException(404, "Post not found")
+
+
+
     await db.upsert_one("bookmarks", {
+
+
+
         "user_id": user["id"],
+
+
+
         "post_id": payload.post_id,
+
+
+
         "created_at": now(),
+
+
+
     }, on_conflict="user_id,post_id")
+
+
+
     return {"ok": True, "bookmarked": True}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.delete("/bookmarks/{post_id}")
+
+
+
 async def delete_bookmark(post_id: str, user: dict = Depends(current_user)):
+
+
+
     await db.delete_one("bookmarks", {"user_id": user["id"], "post_id": post_id})
+
+
+
     return {"ok": True, "bookmarked": False}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/bookmarks")
+
+
+
 async def list_bookmarks(user: dict = Depends(current_user)):
+
+
+
     rows = await db.find_many("bookmarks", {"user_id": user["id"]}, order_by="created_at", desc=True, limit=200)
+
+
+
     if not rows:
+
+
+
         return {"post_ids": [], "posts": []}
+
+
+
     post_ids = [r["post_id"] for r in rows]
+
+
+
     posts = await db.find_many("posts", {"id": {"$in": post_ids}}, limit=200)
+
+
+
     order = {pid: idx for idx, pid in enumerate(post_ids)}
+
+
+
     posts.sort(key=lambda p: order.get(p["id"], 9999))
+
+
+
     return {"post_ids": post_ids, "posts": posts}
+
+
+
+
+
+
+
+
+
 
 
 # ─── Likes & Comments (Optimized with Batching & Redux Buffer) ───────────────
 
+
+
+
+
+
+
 @api_router.post("/posts/batch-likes")
+
+
+
 async def batch_likes(payload: BatchLikesPayload, user: dict = Depends(current_user)):
+
+
+
     """Batch-process like/unlike actions buffered in Redux (dispatched every 2s).
+
+
+
     Greatly reduces database load from high-frequency row locking."""
+
+
+
     for action in payload.actions:
+
+
+
         pid = action.post_id
+
+
+
         if action.liked:
+
+
+
             existing = await db.find_one("likes", {"post_id": pid, "user_id": user["id"]})
+
+
+
             if not existing:
+
+
+
                 await db.upsert_one("likes", {
+
+
+
                     "post_id": pid,
+
+
+
                     "user_id": user["id"],
+
+
+
                     "created_at": now(),
+
+
+
                 }, on_conflict="post_id,user_id")
+
+
+
                 new_count = await db.count("likes", {"post_id": pid})
+
+
+
                 await db.update_one("posts", {"id": pid}, {"like_count": new_count})
+
+
+
                 p = await db.find_one("posts", {"id": pid})
+
+
+
                 if p:
+
+
+
                     await notify(
+
+
+
                         recipient_id=p["reporter_id"],
+
+
+
                         kind="like",
+
+
+
                         actor=user,
+
+
+
                         message=f"{user['name']} liked your dispatch.",
+
+
+
                         subject_id=pid,
+
+
+
                         subject_kind="post",
+
+
+
                     )
+
+
+
         else:
+
+
+
             existing = await db.find_one("likes", {"post_id": pid, "user_id": user["id"]})
+
+
+
             if existing:
+
+
+
                 await db.delete_one("likes", {"post_id": pid, "user_id": user["id"]})
+
+
+
                 new_count = await db.count("likes", {"post_id": pid})
+
+
+
                 await db.update_one("posts", {"id": pid}, {"like_count": new_count})
+
+
+
+
+
+
 
     post_ids = list({a.post_id for a in payload.actions})
+
+
+
     posts = await db.find_many("posts", {"id": {"$in": post_ids}})
+
+
+
     user_likes = await db.find_many("likes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+
+
+
     liked_set = {l["post_id"] for l in user_likes}
 
+
+
+
+
+
+
     results = [
+
+
+
         {
+
+
+
             "post_id": p["id"],
+
+
+
             "like_count": p.get("like_count", 0) or 0,
+
+
+
             "liked": p["id"] in liked_set,
+
+
+
         }
+
+
+
         for p in posts
+
+
+
     ]
+
+
+
     return {"ok": True, "results": results}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/posts/{post_id}/like")
+
+
+
 async def toggle_single_like(post_id: str, user: dict = Depends(current_user)):
+
+
+
     """Toggle like for a single post."""
+
+
+
     existing = await db.find_one("likes", {"post_id": post_id, "user_id": user["id"]})
+
+
+
     p = await db.find_one("posts", {"id": post_id})
+
+
+
     if not p:
+
+
+
         raise HTTPException(404, "Post not found")
 
+
+
+
+
+
+
     if existing:
+
+
+
         await db.delete_one("likes", {"post_id": post_id, "user_id": user["id"]})
+
+
+
         new_count = await db.count("likes", {"post_id": post_id})
+
+
+
         await db.update_one("posts", {"id": post_id}, {"like_count": new_count})
+
+
+
         return {"liked": False, "like_count": new_count, "post_id": post_id}
+
+
+
     else:
+
+
+
         await db.upsert_one("likes", {
+
+
+
             "post_id": post_id,
+
+
+
             "user_id": user["id"],
+
+
+
             "created_at": now(),
+
+
+
         }, on_conflict="post_id,user_id")
+
+
+
         new_count = await db.count("likes", {"post_id": post_id})
+
+
+
         await db.update_one("posts", {"id": post_id}, {"like_count": new_count})
+
+
+
         await notify(
+
+
+
             recipient_id=p["reporter_id"],
+
+
+
             kind="like",
+
+
+
             actor=user,
+
+
+
             message=f"{user['name']} liked your dispatch.",
+
+
+
             subject_id=post_id,
+
+
+
             subject_kind="post",
+
+
+
         )
+
+
+
         return {"liked": True, "like_count": new_count, "post_id": post_id}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/posts/likes/mine")
+
+
+
 async def my_liked_posts(user: dict = Depends(current_user)):
+
+
+
     rows = await db.find_many("likes", {"user_id": user["id"]})
+
+
+
     return {"liked_post_ids": [r["post_id"] for r in rows]}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/posts/{post_id}")
+
+
+
 async def get_single_post(post_id: str, user: Optional[dict] = Depends(optional_user)):
+
+
+
     post = await db.find_one("posts", {"id": post_id})
+
+
+
     if not post:
+
+
+
         raise HTTPException(404, "Post not found")
+
+
+
     if isinstance(post.get("media"), str):
+
+
+
         try:
+
+
+
             post["media"] = json.loads(post["media"])
+
+
+
         except Exception:
+
+
+
             post["media"] = []
+
+
+
     enriched = await _enrich_posts_interaction([post], user)
+
+
+
     return enriched[0]
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/posts/{post_id}/comments")
+
+
+
 async def get_post_comments(post_id: str):
+
+
+
     """Retrieve comments for a dispatch, ordered chronologically."""
+
+
+
     comments = await db.find_many("comments", {"post_id": post_id}, order_by="created_at", desc=False, limit=200)
+
+
+
     return comments
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/posts/{post_id}/comments")
+
+
+
 async def create_post_comment(post_id: str, payload: CommentCreate, user: dict = Depends(current_user)):
+
+
+
     """Create a new comment and increment post comment_count."""
+
+
+
     post = await db.find_one("posts", {"id": post_id})
+
+
+
     if not post:
+
+
+
         raise HTTPException(404, "Post not found")
 
+
+
+
+
+
+
     comment_data = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "post_id": post_id,
+
+
+
         "user_id": user["id"],
+
+
+
         "user_name": user["name"],
+
+
+
         "body": payload.body.strip(),
+
+
+
         "parent_id": payload.parent_id,
+
+
+
         "created_at": now(),
+
+
+
     }
+
+
+
     created = await db.insert_one("comments", comment_data)
 
+
+
+
+
+
+
     new_count = await db.count("comments", {"post_id": post_id})
+
+
+
     await db.update_one("posts", {"id": post_id}, {"comment_count": new_count})
 
+
+
+
+
+
+
     await notify(
+
+
+
         recipient_id=post["reporter_id"],
+
+
+
         kind="comment",
+
+
+
         actor=user,
+
+
+
         message=f"{user['name']} commented: {payload.body[:60]}",
+
+
+
         subject_id=post_id,
+
+
+
         subject_kind="post",
+
+
+
     )
+
+
+
     return created
 
 
+
+
+
+
+
+
+
+
+
 @api_router.delete("/comments/{comment_id}")
+
+
+
 async def delete_post_comment(comment_id: str, user: dict = Depends(current_user)):
+
+
+
     """Delete a comment and decrement post comment_count."""
+
+
+
     comment = await db.find_one("comments", {"id": comment_id})
+
+
+
     if not comment:
+
+
+
         raise HTTPException(404, "Comment not found")
+
+
+
     if comment["user_id"] != user["id"] and user["role"] not in ("admin", "reporter"):
+
+
+
         raise HTTPException(403, "Not allowed to delete this comment")
+
+
+
+
+
+
 
     await db.delete_one("comments", {"id": comment_id})
 
+
+
+
+
+
+
     new_count = await db.count("comments", {"post_id": comment["post_id"]})
+
+
+
     await db.update_one("posts", {"id": comment["post_id"]}, {"comment_count": new_count})
 
+
+
+
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 async def _support_totals(reporter_ids: list[str]) -> dict[str, int]:
+
+
+
     if not reporter_ids:
+
+
+
         return {}
+
+
+
     rows = await db.rpc("support_totals", {"reporter_ids": reporter_ids})
+
+
+
     return {row["reporter_id"]: row["total"] for row in rows}
 
 
+
+
+
+
+
+
+
+
+
 async def _follower_count(reporter_id: str) -> int:
+
+
+
     return await db.count("follows", {"reporter_id": reporter_id})
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/search")
+
+
+
 async def search_all(q: str = "", user: dict = Depends(current_user)):
+
+
+
     if not q or len(q.strip()) < 2:
+
+
+
         return {"posts": [], "reporters": [], "users": []}
+
+
+
     
+
+
+
     q = q.strip()
+
+
+
     posts = await db.search_posts(q)
+
+
+
     reporters = await db.search_reporters(q)
+
+
+
     users = await db.search_users(q)
+
+
+
     
+
+
+
     # Strip sensitive fields from users and reporters
+
+
+
     reporters = [_strip_keys(r, ["password_hash"]) for r in reporters]
+
+
+
     users = [_strip_keys(u, ["password_hash"]) for u in users]
 
+
+
+
+
+
+
     # Annotate reporters with support and follower counts
+
+
+
     reporter_ids = [r["id"] for r in reporters]
+
+
+
     totals = await _support_totals(reporter_ids)
+
+
+
     fc_rows = await db.rpc("follower_counts", {"reporter_ids": reporter_ids}) if reporter_ids else []
+
+
+
     fc_map = {row["reporter_id"]: row["count"] for row in fc_rows}
+
+
+
     
+
+
+
     for r in reporters:
+
+
+
         r["followers"] = fc_map.get(r["id"], 0)
+
+
+
         r["support_total"] = totals.get(r["id"], 0)
+
+
+
         
+
+
+
     # Annotate posts with author, bookmarks, tips, upvotes
+
+
+
     if posts:
+
+
+
         post_ids = [p["id"] for p in posts]
+
+
+
         
+
+
+
         b_rows = await db.rpc("post_bookmarks", {"post_ids": post_ids})
+
+
+
         b_map = {row["post_id"]: row["count"] for row in b_rows}
+
+
+
         
+
+
+
         my_b = await db.find_many("bookmarks", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+
+
+
         my_b_set = {b["post_id"] for b in my_b}
+
+
+
         
+
+
+
         # Upvotes
+
+
+
         u_rows = await db.rpc("post_upvotes", {"post_ids": post_ids})
+
+
+
         u_map = {row["post_id"]: row["count"] for row in u_rows}
+
+
+
         
+
+
+
         my_u = await db.find_many("upvotes", {"post_id": {"$in": post_ids}, "user_id": user["id"]})
+
+
+
         my_u_set = {u["post_id"] for u in my_u}
+
+
+
         
+
+
+
         author_ids = list({p["reporter_id"] for p in posts})
+
+
+
         authors = await db.find_many("users", {"id": {"$in": author_ids}})
+
+
+
         author_map = {a["id"]: a for a in authors}
+
+
+
         
+
+
+
         for p in posts:
+
+
+
             a = author_map.get(p["reporter_id"])
+
+
+
             p["author_name"] = a["name"] if a else "Unknown"
+
+
+
             p["author_verified"] = a.get("verified", False) if a else False
+
+
+
             p["bookmarked"] = p["id"] in my_b_set
+
+
+
             p["bookmarks"] = b_map.get(p["id"], 0)
+
+
+
             p["upvoted"] = p["id"] in my_u_set
+
+
+
             p["upvotes"] = u_map.get(p["id"], 0)
+
+
+
             p["support_total"] = totals.get(p["reporter_id"], 0)
 
+
+
+
+
+
+
     return {
+
+
+
         "posts": posts,
+
+
+
         "reporters": reporters,
+
+
+
         "users": users
+
+
+
     }
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/reporters")
+
+
+
 async def list_reporters():
+
+
+
     users = await db.find_many(
+
+
+
         "users",
+
+
+
         {"role": "reporter", "disabled": False},
+
+
+
         limit=50,
+
+
+
     )
+
+
+
     users = [_strip_keys(u, ["password_hash"]) for u in users]
+
+
+
     ids = [u["id"] for u in users]
+
+
+
     totals = await _support_totals(ids)
+
+
+
     follower_counts_map: dict[str, int] = {}
+
+
+
     fc_rows = await db.rpc("follower_counts", {"reporter_ids": ids})
+
+
+
     for row in fc_rows:
+
+
+
         follower_counts_map[row["reporter_id"]] = row["count"]
+
+
+
     return [
+
+
+
         {
+
+
+
             "id": u["id"],
+
+
+
             "name": u["name"],
+
+
+
             "beat": u.get("beat", "Independent reporting"),
+
+
+
             "location": u.get("location", "India"),
+
+
+
             "followers": follower_counts_map.get(u["id"], 0),
+
+
+
             "support_total": totals.get(u["id"], 0),
+
+
+
             "verified": u.get("verified", False),
+
+
+
         }
+
+
+
         for u in users
+
+
+
     ]
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/reporters/following")
+
+
+
 async def get_reporters_following(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+
+
+
     if not credentials:
+
+
+
         raise HTTPException(401, "Not authenticated")
+
+
+
     try:
+
+
+
         claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
     except Exception:
+
+
+
         raise HTTPException(401, "Invalid token")
+
+
+
     viewer_id = claims.get("sub")
+
+
+
     
+
+
+
     follows = await db.find_many("follows", {"supporter_id": viewer_id})
+
+
+
     reporter_ids = [f["reporter_id"] for f in follows]
+
+
+
     if not reporter_ids:
+
+
+
         return []
+
+
+
         
+
+
+
     users = await db.find_many("users", {"id": {"$in": reporter_ids}, "role": "reporter", "disabled": False})
+
+
+
     
+
+
+
     return [
+
+
+
         {
+
+
+
             "id": u["id"],
+
+
+
             "name": u["name"],
+
+
+
             "avatar_url": u.get("avatar_url"),
+
+
+
             "verified": u.get("verified", False)
+
+
+
         }
+
+
+
         for u in users
+
+
+
     ]
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/reporters/{reporter_id}")
+
+
+
 async def get_reporter(reporter_id: str, credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+
+
+
     user = await db.find_one("users", {"id": reporter_id, "role": "reporter"})
+
+
+
     if not user:
+
+
+
         raise HTTPException(404, "Reporter not found")
+
+
+
     user = _strip_keys(user, ["password_hash"])
+
+
+
     posts = await db.find_many("posts", {"reporter_id": reporter_id}, order_by="created_at", desc=True, limit=50)
+
+
+
     for p in posts:
+
+
+
         if isinstance(p.get("media"), str):
+
+
+
             try:
+
+
+
                 p["media"] = json.loads(p["media"])
+
+
+
             except Exception:
+
+
+
                 p["media"] = []
+
+
+
     totals = await _support_totals([reporter_id])
+
+
+
     followers = await _follower_count(reporter_id)
+
+
+
     is_following = False
+
+
+
     viewer = None
+
+
+
     if credentials:
+
+
+
         try:
+
+
+
             claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
             viewer = claims.get("sub")
+
+
+
             follow_row = await db.find_one("follows", {"reporter_id": reporter_id, "supporter_id": viewer})
+
+
+
             is_following = follow_row is not None
+
+
+
         except Exception:
+
+
+
             viewer = None
+
+
+
     following_count = await db.count("follows", {"supporter_id": reporter_id})
+
+
+
     return {
+
+
+
         "reporter": public_user(user) | {
+
+
+
             "beat": user.get("beat"),
+
+
+
             "location": user.get("location"),
+
+
+
             "followers": followers,
+
+
+
             "following": following_count,
+
+
+
             "support_total": totals.get(reporter_id, 0),
+
+
+
             "is_following": is_following,
+
+
+
         },
+
+
+
         "posts": posts,
+
+
+
     }
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/reporters/{reporter_id}/follow")
+
+
+
 async def follow_reporter(reporter_id: str, user: dict = Depends(current_user)):
+
+
+
     if user["id"] == reporter_id:
+
+
+
         raise HTTPException(400, "You cannot follow yourself")
+
+
+
     if not await db.find_one("users", {"id": reporter_id, "role": "reporter"}):
+
+
+
         raise HTTPException(404, "Reporter not found")
+
+
+
     # Check if already following
+
+
+
     existing = await db.find_one("follows", {"reporter_id": reporter_id, "supporter_id": user["id"]})
+
+
+
     is_new = existing is None
+
+
+
     if is_new:
+
+
+
         await db.insert_one("follows", {
+
+
+
             "reporter_id": reporter_id,
+
+
+
             "supporter_id": user["id"],
+
+
+
             "created_at": now(),
+
+
+
         })
+
+
+
         await notify(
+
+
+
             reporter_id,
+
+
+
             "follow",
+
+
+
             user,
+
+
+
             f"{user['name']} started following you.",
+
+
+
             subject_id=user["id"],
+
+
+
             subject_kind="reader",
+
+
+
         )
+
+
+
     return {"ok": True, "following": True, "followers": await _follower_count(reporter_id)}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.delete("/reporters/{reporter_id}/follow")
+
+
+
 async def unfollow_reporter(reporter_id: str, user: dict = Depends(current_user)):
+
+
+
     await db.delete_one("follows", {"reporter_id": reporter_id, "supporter_id": user["id"]})
+
+
+
     return {"ok": True, "following": False, "followers": await _follower_count(reporter_id)}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/posts")
+
+
+
 async def create_post(payload: PostCreate, user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     media_data = [m.model_dump() for m in payload.media] if payload.media else []
+
+
+
     post = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "reporter_id": user["id"],
+
+
+
         "reporter_name": user["name"],
+
+
+
         "title": payload.title,
+
+
+
         "body": payload.body,
+
+
+
         "kind": payload.kind,
+
+
+
         "location": payload.location,
+
+
+
         "media": json.dumps(media_data),
+
+
+
         "verified": user.get("verified", False),
+
+
+
         "stats": "New dispatch",
+
+
+
         "created_at": now(),
+
+
+
     }
+
+
+
     result = await db.insert_one("posts", post)
+    # Notify all followers of this reporter
+    async def _notify_post_followers():
+        try:
+            follows = await db.find_many("follows", {"reporter_id": user["id"]})
+            for f in follows:
+                supporter_id = f.get("supporter_id")
+                if supporter_id:
+                    await notify(
+                        supporter_id,
+                        "post",
+                        user,
+                        f"{user['name']} published: {payload.title}",
+                        subject_id=post["id"],
+                        subject_kind="post"
+                    )
+        except Exception as e:
+            logging.error(f"Error notifying followers on post creation: {e}")
+    asyncio.create_task(_notify_post_followers())
+
+
+
     # Return media as parsed JSON, not a string
+
+
+
     result["media"] = media_data
+
+
+
     return result
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/posts/mine")
+
+
+
 async def my_posts(user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     posts = await db.find_many("posts", {"reporter_id": user["id"]}, order_by="created_at", desc=True, limit=100)
+
+
+
     for p in posts:
+
+
+
         if isinstance(p.get("media"), str):
+
+
+
             try:
+
+
+
                 p["media"] = json.loads(p["media"])
+
+
+
             except Exception:
+
+
+
                 p["media"] = []
+
+
+
     return posts
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/reporter/earnings")
+
+
+
 async def reporter_earnings(user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     """Lifetime earnings breakdown for the signed-in reporter."""
+
+
+
     reporter_id = user["id"]
+
+
+
     # Lifetime verified totals
+
+
+
     totals_rows = await db.rpc("support_totals", {"reporter_ids": [reporter_id]})
+
+
+
     lifetime = 0
+
+
+
     verified_count = 0
+
+
+
     for row in totals_rows:
+
+
+
         if row["reporter_id"] == reporter_id:
+
+
+
             lifetime = row["total"]
+
+
+
             verified_count = row["count"]
+
+
+
     # Pending / created (not yet captured)
+
+
+
     pending_supports = await db.find_many(
+
+
+
         "supports",
+
+
+
         {"reporter_id": reporter_id, "status": {"$in": ["created", "pending"]}},
+
+
+
     )
+
+
+
     pending_amount = sum(s.get("amount", 0) for s in pending_supports)
+
+
+
     pending_count = len(pending_supports)
+
+
+
     # Active monthly pledges
+
+
+
     monthly_pledges = await db.count("supports", {
+
+
+
         "reporter_id": reporter_id,
+
+
+
         "interval": "monthly",
+
+
+
         "status": {"$in": ["verified", "pending"]},
+
+
+
     })
+
+
+
     # Top supporters
+
+
+
     top_rows = await db.rpc("top_supporters", {"target_reporter_id": reporter_id, "max_results": 5})
+
+
+
     top_supporters: list[dict] = []
+
+
+
     for row in top_rows:
+
+
+
         supporter = await db.find_one("users", {"id": row["supporter_id"]})
+
+
+
         top_supporters.append({
+
+
+
             "supporter_id": row["supporter_id"],
+
+
+
             "name": supporter["name"] if supporter else "Anonymous reader",
+
+
+
             "total": row["total"],
+
+
+
             "count": row["count"],
+
+
+
         })
+
+
+
     return {
+
+
+
         "lifetime": lifetime,
+
+
+
         "verified_count": verified_count,
+
+
+
         "pending_amount": pending_amount,
+
+
+
         "pending_count": pending_count,
+
+
+
         "monthly_pledges": monthly_pledges,
+
+
+
         "top_supporters": top_supporters,
+
+
+
     }
+
+
+
+
+
+
+
+
+
 
 
 @api_router.get("/reporter/analytics")
+
+
+
 async def reporter_analytics(user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     """Analytics overview for the signed-in reporter."""
+
+
+
     reporter_id = user["id"]
+
+
+
     posts = await db.find_many("posts", {"reporter_id": reporter_id})
+
+
+
     followers = await db.count("reporter_follows", {"reporter_id": reporter_id})
+
+
+
     total_posts = len(posts)
+
+
+
     total_reads = sum(p.get("views", p.get("reads", 0)) for p in posts)
+
+
+
     top_posts = [
+
+
+
         {
+
+
+
             "post_id": p["id"],
+
+
+
             "title": p.get("title", "Untitled"),
+
+
+
             "reads": p.get("views", p.get("reads", 0)),
+
+
+
         }
+
+
+
         for p in sorted(posts, key=lambda x: x.get("views", x.get("reads", 0)), reverse=True)[:5]
+
+
+
     ]
+
+
+
     return {
+
+
+
         "total_reads": total_reads,
+
+
+
         "total_followers": followers,
+
+
+
         "total_posts": total_posts,
+
+
+
         "top_posts": top_posts,
+
+
+
     }
+
+
+
+
+
+
+
+
+
 
 
 @api_router.delete("/posts/{post_id}")
+
+
+
 async def delete_post(post_id: str, user: dict = Depends(current_user)):
+
+
+
     post = await db.find_one("posts", {"id": post_id})
+
+
+
     if not post:
+
+
+
         raise HTTPException(404, "Post not found")
+
+
+
     if user["role"] != "admin" and post["reporter_id"] != user["id"]:
+
+
+
         raise HTTPException(403, "You can only delete your own posts")
+
+
+
     await db.delete_one("posts", {"id": post_id})
+
+
+
     return {"ok": True}
 
+
+
+
+
+
+
 @api_router.post("/storage/upload-url")
+
+
+
 async def create_storage_upload(payload: UploadCreate, user: dict = Depends(current_user)):
+
+
+
     """Generate a presigned URL to upload a file directly to Supabase Storage."""
+
+
+
     supabase = db.get_client()
+
+
+
     bucket = "media"
+
+
+
     
+
+
+
     # Generate unique key for the file
+
+
+
     ext = payload.filename.split(".")[-1] if "." in payload.filename else ""
+
+
+
     key = f"uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+
+
+
     
+
+
+
     # Try to ensure bucket exists (requires service_role key to bypass RLS)
+
+
+
     try:
+
+
+
         buckets = supabase.storage.list_buckets()
+
+
+
         if bucket not in [b.name for b in buckets]:
+
+
+
             supabase.storage.create_bucket(bucket, options={'public': True})
+
+
+
     except Exception:
+
+
+
         pass
+
+
+
         
+
+
+
     # Generate Presigned URL for upload
+
+
+
     res = supabase.storage.from_(bucket).create_signed_upload_url(key)
+
+
+
     
+
+
+
     # In supabase-py, if there is an error it usually returns a dict with 'error'
+
+
+
     if isinstance(res, dict) and "error" in res:
+
+
+
         raise HTTPException(500, f"Supabase storage error: {res.get('message', res['error'])}")
+
+
+
         
+
+
+
     upload_url = res.get("signedUrl") or res.get("signed_url") or res
+
+
+
     if isinstance(res, dict) and "url" in res:
+
+
+
          upload_url = res["url"] # Just in case it's named 'url'
+
+
+
          
+
+
+
     # URL to access the file after upload
+
+
+
     public_url = supabase.storage.from_(bucket).get_public_url(key)
+
+
+
     
+
+
+
     return {
+
+
+
         "upload_url": upload_url,
+
+
+
         "key": key,
+
+
+
         "public_url": public_url
+
+
+
     }
+
+
+
+
+
+
 
 @api_router.post("/storage/upload")
+
+
+
 async def upload_storage_file(file: UploadFile = File(...), user: dict = Depends(current_user)):
+
+
+
     """Direct multipart file upload to Supabase Storage."""
+
+
+
     supabase = db.get_client()
+
+
+
     bucket = "media"
+
+
+
     
+
+
+
     ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "jpg"
+
+
+
     key = f"uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+
+
+
     
+
+
+
     try:
+
+
+
         buckets = supabase.storage.list_buckets()
+
+
+
         if bucket not in [b.name for b in buckets]:
+
+
+
             supabase.storage.create_bucket(bucket, options={'public': True})
+
+
+
     except Exception:
+
+
+
         pass
+
+
+
         
+
+
+
     contents = await file.read()
+
+
+
     content_type = file.content_type or "application/octet-stream"
+
+
+
     
+
+
+
     try:
+
+
+
         supabase.storage.from_(bucket).upload(
+
+
+
             path=key,
+
+
+
             file=contents,
+
+
+
             file_options={"content-type": content_type}
+
+
+
         )
+
+
+
     except Exception:
+
+
+
         try:
+
+
+
             supabase.storage.from_(bucket).upload(
+
+
+
                 path=key,
+
+
+
                 file=contents,
+
+
+
                 file_options={"content-type": content_type, "upsert": "true"}
+
+
+
             )
+
+
+
         except Exception as e:
+
+
+
             raise HTTPException(500, f"Upload error: {str(e)}")
+
+
+
             
+
+
+
     public_url = supabase.storage.from_(bucket).get_public_url(key)
+
+
+
     return {
+
+
+
         "url": public_url,
+
+
+
         "public_url": public_url,
+
+
+
         "key": key
+
+
+
     }
 
+
+
+
+
+
+
 @api_router.post("/media/upload-url")
+
+
+
 async def create_upload(payload: UploadCreate, user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     provider_required("MUX_TOKEN_ID", "MUX_TOKEN_SECRET")
+
+
+
     auth = (get_env_var("MUX_TOKEN_ID"), get_env_var("MUX_TOKEN_SECRET"))
+
+
+
     body = {
+
+
+
         "cors_origin": "*",
+
+
+
         "new_asset_settings": {"playback_policies": ["public"], "passthrough": user["id"]},
+
+
+
     }
+
+
+
     async with httpx.AsyncClient(timeout=20) as http:
+
+
+
         response = await http.post("https://api.mux.com/video/v1/uploads", auth=auth, json=body)
+
+
+
     if response.status_code >= 400:
+
+
+
         raise HTTPException(502, "Mux could not create an upload URL")
+
+
+
     data = response.json()["data"]
+
+
+
     await db.insert_one("media", {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "owner_id": user["id"],
+
+
+
         "upload_id": data["id"],
+
+
+
         "filename": payload.filename,
+
+
+
         "content_type": payload.content_type,
+
+
+
         "status": "waiting",
+
+
+
         "created_at": now(),
+
+
+
     })
+
+
+
     return {"upload_url": data["url"], "upload_id": data["id"]}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/media/{upload_id}")
+
+
+
 async def media_status(upload_id: str, user: dict = Depends(current_user)):
+
+
+
     """Poll Mux for the asset backing an upload_id and cache the playback_id.
+
+
+
     Used by the frontend after a direct upload finishes when the webhook is not
+
+
+
     wired in dev."""
+
+
+
     provider_required("MUX_TOKEN_ID", "MUX_TOKEN_SECRET")
+
+
+
     record = await db.find_one("media", {"upload_id": upload_id})
+
+
+
     if not record:
+
+
+
         raise HTTPException(404, "Upload not found")
+
+
+
     if record.get("playback_id"):
+
+
+
         return record
+
+
+
     auth = (get_env_var("MUX_TOKEN_ID"), get_env_var("MUX_TOKEN_SECRET"))
+
+
+
     async with httpx.AsyncClient(timeout=20) as http:
+
+
+
         up_res = await http.get(f"https://api.mux.com/video/v1/uploads/{upload_id}", auth=auth)
+
+
+
         if up_res.status_code >= 400:
+
+
+
             raise HTTPException(502, "Mux could not read the upload status")
+
+
+
         asset_id = (up_res.json().get("data") or {}).get("asset_id")
+
+
+
         if not asset_id:
+
+
+
             return {**record, "status": "waiting"}
+
+
+
         asset_res = await http.get(f"https://api.mux.com/video/v1/assets/{asset_id}", auth=auth)
+
+
+
         if asset_res.status_code >= 400:
+
+
+
             raise HTTPException(502, "Mux could not read the asset")
+
+
+
         asset = asset_res.json().get("data", {})
+
+
+
     playback_ids = asset.get("playback_ids") or []
+
+
+
     playback_id = playback_ids[0]["id"] if playback_ids else None
+
+
+
     await db.update_one(
+
+
+
         "media",
+
+
+
         {"upload_id": upload_id},
+
+
+
         {"status": asset.get("status", "processing"), "asset_id": asset_id, "playback_id": playback_id},
+
+
+
     )
+
+
+
     return {**record, "status": asset.get("status", "processing"), "asset_id": asset_id, "playback_id": playback_id}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/webhooks/mux")
+
+
+
 async def mux_webhook(request: Request):
+
+
+
     provider_required("MUX_WEBHOOK_SECRET")
+
+
+
     raw = await request.body()
+
+
+
     signature = request.headers.get("mux-signature", "")
+
+
+
     expected = hmac.new(os.environ["MUX_WEBHOOK_SECRET"].encode(), raw, hashlib.sha256).hexdigest()
+
+
+
     if not hmac.compare_digest(signature, expected):
+
+
+
         raise HTTPException(401, "Invalid Mux signature")
+
+
+
     event = json.loads(raw)
+
+
+
     data = event.get("data", {})
+
+
+
     if event.get("type") == "video.asset.ready":
+
+
+
         playback_ids = data.get("playback_ids") or [{}]
+
+
+
         await db.update_one(
+
+
+
             "media",
+
+
+
             {"upload_id": data.get("upload_id") or data.get("id")},
+
+
+
             {"status": "ready", "asset_id": data.get("id"), "playback_id": playback_ids[0].get("id")},
+
+
+
         )
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/live/token")
+
+
+
 async def live_token(payload: LiveCreate, user: dict = Depends(require_roles("reporter", "admin"))):
+
+
+
     provider_required("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+
+
+
     room_name = payload.room or f"freepress-{uuid.uuid4().hex[:12]}"
+
+
+
     token = (
+
+
+
         livekit_api.AccessToken(get_env_var("LIVEKIT_API_KEY"), get_env_var("LIVEKIT_API_SECRET"))
+
+
+
         .with_identity(user["id"])
+
+
+
         .with_name(user["name"])
+
+
+
         .with_grants(livekit_api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True))
+
+
+
     )
+
+
+
+    # Auto-end any previous dangling live sessions for this reporter
+
+
+
+    try:
+
+
+
+        await db.update_many("live_sessions", {"reporter_id": user["id"], "status": "live"}, {"status": "ended", "ended_at": now()})
+
+
+
+    except Exception:
+
+
+
+        pass
+
+
+
+
+
+
+
     session_id = str(uuid.uuid4())
+
+
+
     await db.insert_one("live_sessions", {
+
+
+
         "id": session_id,
+
+
+
         "room": room_name,
+
+
+
         "reporter_id": user["id"],
+
+
+
         "reporter_name": user["name"],
+
+
+
         "title": payload.title,
+
+
+
         "status": "live",
+
+
+
         "started_at": now(),
+
+
+
     })
+    # Notify followers that reporter is live streaming now
+    async def _notify_live_followers():
+        try:
+            follows = await db.find_many("follows", {"reporter_id": user["id"]})
+            for f in follows:
+                supporter_id = f.get("supporter_id")
+                if supporter_id:
+                    await notify(
+                        supporter_id,
+                        "live",
+                        user,
+                        f"🔴 {user['name']} is LIVE now: {payload.title}",
+                        subject_id=session_id,
+                        subject_kind="live"
+                    )
+        except Exception as e:
+            logging.error(f"Error notifying followers on live broadcast: {e}")
+    asyncio.create_task(_notify_live_followers())
+
+
+
     return {"token": token.to_jwt(), "url": get_env_var("LIVEKIT_URL"), "room": room_name, "session_id": session_id}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/live/sessions")
+
+
+
 async def live_sessions():
-    return await db.find_many("live_sessions", {"status": "live"}, order_by="started_at", desc=True, limit=50)
+
+
+
+    sessions = await db.find_many("live_sessions", {"status": "live"}, order_by="started_at", desc=True, limit=50)
+
+
+
+    valid_sessions = []
+
+
+
+    threshold = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=4)).isoformat()
+
+
+
+    for s in sessions:
+
+
+
+        if s.get("started_at") and s["started_at"] < threshold:
+
+
+
+            try:
+
+
+
+                await db.update_one("live_sessions", {"id": s["id"]}, {"status": "ended", "ended_at": now()})
+
+
+
+            except Exception:
+
+
+
+                pass
+
+
+
+        else:
+
+
+
+            valid_sessions.append(s)
+
+
+
+    return valid_sessions
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/live/viewer-token")
+
+
+
 async def live_viewer_token(payload: dict, user: dict = Depends(current_user)):
+
+
+
     provider_required("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+
+
+
     room_name = payload.get("room")
+
+
+
     if not room_name:
+
+
+
         raise HTTPException(400, "room is required")
+
+
+
+    session = await db.find_one("live_sessions", {"room": room_name})
+
+
+
+    if session and session.get("status") == "ended":
+
+
+
+        raise HTTPException(410, "This live stream has ended")
+
+
+
     token = (
+
+
+
         livekit_api.AccessToken(get_env_var("LIVEKIT_API_KEY"), get_env_var("LIVEKIT_API_SECRET"))
+
+
+
         .with_identity(user["id"])
+
+
+
         .with_name(user["name"])
+
+
+
         .with_grants(livekit_api.VideoGrants(room_join=True, room=room_name, can_publish=False, can_subscribe=True))
+
+
+
     )
+
+
+
     return {"token": token.to_jwt(), "url": get_env_var("LIVEKIT_URL"), "room": room_name}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/live/{session_id}/end")
+
+
+
 async def end_live(session_id: str, user: dict = Depends(current_user)):
+
+
+
     session = await db.find_one("live_sessions", {"id": session_id})
+
+
+
     if not session:
-        raise HTTPException(404, "Session not found")
+
+
+
+        session = await db.find_one("live_sessions", {"room": session_id})
+
+
+
+    if not session:
+
+
+
+        return {"ok": True, "status": "ended"}
+
+
+
     if user["role"] != "admin" and session["reporter_id"] != user["id"]:
+
+
+
         raise HTTPException(403, "You cannot end this session")
-    await db.update_one("live_sessions", {"id": session_id}, {"status": "ended", "ended_at": now()})
+
+
+
+    await db.update_one("live_sessions", {"id": session["id"]}, {"status": "ended", "ended_at": now()})
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/support")
+
+
+
 async def support_reporter(payload: SupportCreate, user: dict = Depends(require_roles("client"))):
+
+
+
     if payload.amount != 7:
+
+
+
         raise HTTPException(400, "Support amount must be ₹7")
+
+
+
     if payload.interval not in {"once", "monthly"}:
+
+
+
         raise HTTPException(400, "interval must be 'once' or 'monthly'")
+
+
+
     provider_required("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET")
+
+
+
     gateway = razorpay.Client(auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"]))
+
+
+
     if payload.interval == "monthly":
+
+
+
         plan_id = os.getenv("RAZORPAY_MONTHLY_PLAN_ID")
+
+
+
         if not plan_id:
+
+
+
             raise HTTPException(
+
+
+
                 503,
+
+
+
                 "Monthly support is coming soon — add RAZORPAY_MONTHLY_PLAN_ID (a ₹7 monthly plan created in Razorpay) to backend/.env",
+
+
+
             )
+
+
+
         subscription = gateway.subscription.create({
+
+
+
             "plan_id": plan_id,
+
+
+
             "total_count": 24,  # 2 years by default
+
+
+
             "customer_notify": 1,
+
+
+
             "notes": {"supporter_id": user["id"], "reporter_id": payload.reporter_id},
+
+
+
         })
+
+
+
         await db.insert_one("supports", {
+
+
+
             "id": str(uuid.uuid4()),
+
+
+
             "supporter_id": user["id"],
+
+
+
             "reporter_id": payload.reporter_id,
+
+
+
             "amount": 7,
+
+
+
             "interval": "monthly",
+
+
+
             "subscription_id": subscription["id"],
+
+
+
             "status": "pending",
+
+
+
             "created_at": now(),
+
+
+
         })
+
+
+
         return {
+
+
+
             "interval": "monthly",
+
+
+
             "subscription_id": subscription["id"],
+
+
+
             "amount": 700,
+
+
+
             "currency": "INR",
+
+
+
             "key_id": os.environ["RAZORPAY_KEY_ID"],
+
+
+
         }
+
+
+
     order = gateway.order.create({
+
+
+
         "amount": 700,
+
+
+
         "currency": "INR",
+
+
+
         "receipt": f"support-{uuid.uuid4().hex[:16]}",
+
+
+
         "notes": {"supporter_id": user["id"], "reporter_id": payload.reporter_id},
+
+
+
     })
+
+
+
     await db.insert_one("supports", {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "supporter_id": user["id"],
+
+
+
         "reporter_id": payload.reporter_id,
+
+
+
         "amount": 7,
+
+
+
         "interval": "once",
+
+
+
         "order_id": order["id"],
+
+
+
         "status": "created",
+
+
+
         "created_at": now(),
+
+
+
     })
+
+
+
     return {
+
+
+
         "interval": "once",
+
+
+
         "order_id": order["id"],
+
+
+
         "amount": 700,
+
+
+
         "currency": "INR",
+
+
+
         "key_id": os.environ["RAZORPAY_KEY_ID"],
+
+
+
     }
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/support/verify")
+
+
+
 async def verify_support(payload: dict, user: dict = Depends(require_roles("client"))):
+
+
+
     provider_required("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET")
+
+
+
     payment_id = payload.get("razorpay_payment_id")
+
+
+
     signature = payload.get("razorpay_signature")
+
+
+
     subscription_id = payload.get("razorpay_subscription_id")
+
+
+
     order_id = payload.get("razorpay_order_id")
+
+
+
     if not payment_id or not signature or (not subscription_id and not order_id):
+
+
+
         raise HTTPException(400, "Missing payment identifiers")
+
+
+
     gateway = razorpay.Client(auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"]))
+
+
+
     try:
+
+
+
         if subscription_id:
+
+
+
             gateway.utility.verify_payment_signature({
+
+
+
                 "razorpay_subscription_id": subscription_id,
+
+
+
                 "razorpay_payment_id": payment_id,
+
+
+
                 "razorpay_signature": signature,
+
+
+
             })
+
+
+
         else:
+
+
+
             gateway.utility.verify_payment_signature({
+
+
+
                 "razorpay_order_id": order_id,
+
+
+
                 "razorpay_payment_id": payment_id,
+
+
+
                 "razorpay_signature": signature,
+
+
+
             })
+
+
+
     except Exception:
+
+
+
         raise HTTPException(400, "Invalid payment signature")
+
+
+
     query = (
+
+
+
         {"subscription_id": subscription_id, "supporter_id": user["id"]}
+
+
+
         if subscription_id
+
+
+
         else {"order_id": order_id, "supporter_id": user["id"]}
+
+
+
     )
+
+
+
     await db.update_one(
+
+
+
         "supports",
+
+
+
         query,
+
+
+
         {"payment_id": payment_id, "status": "verified", "verified_at": now()},
+
+
+
     )
+
+
+
     updated = await db.find_one("supports", query)
+
+
+
     if updated:
+
+
+
         await notify(
+
+
+
             updated["reporter_id"],
+
+
+
             "support",
+
+
+
             user,
+
+
+
             f"{user['name']} sent you ₹{updated['amount']}"
+
+
+
             + (" (monthly pledge)." if updated.get("interval") == "monthly" else "."),
+
+
+
             subject_id=updated["id"],
+
+
+
             subject_kind="support",
+
+
+
         )
+
+
+
     return {"ok": True, "status": "verified"}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/support/pledges")
+
+
+
 async def list_pledges(user: dict = Depends(current_user)):
+
+
+
     """Return the caller's monthly support pledges, one row per subscription."""
+
+
+
     rows = await db.find_many(
+
+
+
         "supports",
+
+
+
         {
+
+
+
             "supporter_id": user["id"],
+
+
+
             "interval": "monthly",
+
+
+
             "status": {"$in": ["pending", "verified", "active"]},
+
+
+
         },
+
+
+
         order_by="created_at",
+
+
+
         desc=True,
+
+
+
         limit=50,
+
+
+
     )
+
+
+
     reporter_ids = list({r["reporter_id"] for r in rows})
+
+
+
     reporters: dict[str, dict] = {}
+
+
+
     if reporter_ids:
+
+
+
         reporter_rows = await db.find_many("users", {"id": {"$in": reporter_ids}})
+
+
+
         for u in reporter_rows:
+
+
+
             reporters[u["id"]] = {"id": u["id"], "name": u["name"], "verified": u.get("verified", False)}
+
+
+
     return [
+
+
+
         {
+
+
+
             "id": r["id"],
+
+
+
             "subscription_id": r.get("subscription_id"),
+
+
+
             "reporter": reporters.get(r["reporter_id"]) or {"id": r["reporter_id"], "name": "Unknown"},
+
+
+
             "amount": r["amount"],
+
+
+
             "status": r["status"],
+
+
+
             "created_at": r["created_at"],
+
+
+
         }
+
+
+
         for r in rows
+
+
+
     ]
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/support/pledges/{pledge_id}/cancel")
+
+
+
 async def cancel_pledge(pledge_id: str, user: dict = Depends(current_user)):
+
+
+
     pledge = await db.find_one("supports", {"id": pledge_id, "supporter_id": user["id"]})
+
+
+
     if not pledge:
+
+
+
         raise HTTPException(404, "Pledge not found")
+
+
+
     if pledge.get("interval") != "monthly":
+
+
+
         raise HTTPException(400, "Only monthly pledges can be cancelled")
+
+
+
     if pledge.get("status") == "cancelled":
+
+
+
         return {"ok": True, "status": "cancelled"}
+
+
+
     subscription_id = pledge.get("subscription_id")
+
+
+
     # If the pledge was created against Razorpay, tell them to stop billing.
+
+
+
     if subscription_id:
+
+
+
         provider_required("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET")
+
+
+
         gateway = razorpay.Client(auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"]))
+
+
+
         try:
+
+
+
             gateway.subscription.cancel(subscription_id, {"cancel_at_cycle_end": 0})
+
+
+
         except Exception:
+
+
+
             raise HTTPException(502, "Razorpay could not cancel this subscription")
+
+
+
     await db.update_one(
+
+
+
         "supports",
+
+
+
         {"id": pledge_id},
+
+
+
         {"status": "cancelled", "cancelled_at": now()},
+
+
+
     )
+
+
+
     return {"ok": True, "status": "cancelled"}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/webhooks/razorpay")
+
+
+
 async def razorpay_webhook(request: Request):
+
+
+
     provider_required("RAZORPAY_WEBHOOK_SECRET")
+
+
+
     raw = await request.body()
+
+
+
     signature = request.headers.get("x-razorpay-signature", "")
+
+
+
     expected = hmac.new(os.environ["RAZORPAY_WEBHOOK_SECRET"].encode(), raw, hashlib.sha256).hexdigest()
+
+
+
     if not hmac.compare_digest(signature, expected):
+
+
+
         raise HTTPException(401, "Invalid Razorpay signature")
+
+
+
     event = json.loads(raw)
+
+
+
     event_id = request.headers.get("x-razorpay-event-id") or hashlib.sha256(raw).hexdigest()
+
+
+
     if await db.find_one("webhook_events", {"id": event_id}):
+
+
+
         return {"ok": True, "duplicate": True}
+
+
+
     await db.insert_one("webhook_events", {"id": event_id, "event": event.get("event"), "created_at": now()})
+
+
+
     payment = event.get("payload", {}).get("payment", {}).get("entity", {})
+
+
+
     if event.get("event") in {"payment.captured", "order.paid"} and payment.get("order_id"):
+
+
+
         await db.update_one(
+
+
+
             "supports",
+
+
+
             {"order_id": payment["order_id"]},
+
+
+
             {"status": "verified", "payment_id": payment.get("id"), "verified_at": now()},
+
+
+
         )
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/reports")
+
+
+
 async def report_post(payload: ReportCreate, user: dict = Depends(current_user)):
+
+
+
     item = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "reporter_id": user["id"],
+
+
+
         "reporter_name": user["name"],
+
+
+
         "post_id": payload.post_id,
+
+
+
         "reason": payload.reason,
+
+
+
         "note": payload.note,
+
+
+
         "status": "open",
+
+
+
         "created_at": now(),
+
+
+
     }
+
+
+
     await db.insert_one("moderation", item)
+
+
+
     return item
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/admin/overview")
+
+
+
 async def admin_overview(user: dict = Depends(require_roles("admin"))):
+
+
+
     return {
+
+
+
         "users": await db.count("users", {"disabled": False}),
+
+
+
         "reporters": await db.count("users", {"role": "reporter", "disabled": False}),
+
+
+
         "posts": await db.count("posts"),
+
+
+
         "open_reports": await db.count("moderation", {"status": "open"}),
+
+
+
         "live_now": await db.count("live_sessions", {"status": "live"}),
+
+
+
         "queue": await db.find_many("moderation", {"status": "open"}, order_by="created_at", desc=True, limit=20),
+
+
+
     }
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/admin/users")
+
+
+
 async def admin_users(user: dict = Depends(require_roles("admin"))):
+
+
+
     users = await db.find_many("users", order_by="created_at", desc=True, limit=200)
+
+
+
     return [_strip_keys(u, ["password_hash"]) for u in users]
 
 
+
+
+
+
+
+
+
+
+
 @api_router.post("/admin/users/{user_id}/disable")
+
+
+
 async def disable_user(user_id: str, user: dict = Depends(require_roles("admin"))):
+
+
+
     if user_id == user["id"]:
+
+
+
         raise HTTPException(400, "You cannot disable your own account")
+
+
+
     result = await db.update_one("users", {"id": user_id}, {"disabled": True, "disabled_at": now()})
+
+
+
     if result is None:
+
+
+
         raise HTTPException(404, "User not found")
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/admin/users/{user_id}/enable")
+
+
+
 async def enable_user(user_id: str, user: dict = Depends(require_roles("admin"))):
+
+
+
     result = await db.update_one("users", {"id": user_id}, {"disabled": False, "disabled_at": None})
+
+
+
     if result is None:
+
+
+
         raise HTTPException(404, "User not found")
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/admin/users/{user_id}/verify")
+
+
+
 async def verify_user(user_id: str, user: dict = Depends(require_roles("admin"))):
+
+
+
     result = await db.update_one("users", {"id": user_id}, {"verified": True})
+
+
+
     if result is None:
+
+
+
         raise HTTPException(404, "User not found")
+
+
+
     return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 @api_router.post("/reports/{report_id}/resolve")
+
+
+
 async def resolve_report(report_id: str, user: dict = Depends(require_roles("admin"))):
+
+
+
     result = await db.update_one(
+
+
+
         "moderation",
+
+
+
         {"id": report_id, "status": "open"},
+
+
+
         {"status": "resolved", "resolved_by": user["id"], "resolved_at": now()},
+
+
+
     )
+
+
+
     if result is None:
+
+
+
         raise HTTPException(404, "Open report not found")
+
+
+
     return {"id": report_id, "status": "resolved"}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/e2ee/keys/{user_id}")
+
+
+
 async def get_e2ee_key(user_id: str):
+
+
+
     user = await db.find_one("users", {"id": user_id})
+
+
+
     if not user:
+
+
+
         raise HTTPException(404, "User not found")
+
+
+
     if not user.get("public_key"):
+
+
+
         raise HTTPException(404, "User has no public key")
+
+
+
     return {"public_key": user["public_key"]}
 
+
+
+
+
+
+
 @api_router.post("/e2ee/keys")
+
+
+
 async def post_e2ee_key(payload: dict, user: dict = Depends(current_user)):
+
+
+
     public_key = payload.get("public_key")
+
+
+
     if not public_key:
+
+
+
         raise HTTPException(400, "Missing public_key")
+
+
+
     await db.update_one("users", {"id": user["id"]}, {"public_key": public_key})
+
+
+
     return {"ok": True}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/messages")
+
+
+
 async def get_conversations(user: dict = Depends(current_user)):
+
+
+
     user_id = user["id"]
+
+
+
     query = {"$or_string": f"sender_id.eq.{user_id},receiver_id.eq.{user_id}"}
+
+
+
     all_msgs = await db.find_many("messages", query, order_by="created_at", desc=True)
+
+
+
     
+
+
+
     # Group by conversation partner
+
+
+
     convos = {}
+
+
+
     for msg in all_msgs:
+
+
+
         if backend_fernet:
+
+
+
             try:
+
+
+
                 msg["body"] = backend_fernet.decrypt(msg["body"].encode()).decode()
+
+
+
             except Exception:
+
+
+
                 pass # fallback for legacy unencrypted DB rows
+
+
+
         other_id = msg["receiver_id"] if msg["sender_id"] == user_id else msg["sender_id"]
+
+
+
         if other_id not in convos:
+
+
+
             convos[other_id] = msg
+
+
+
     
+
+
+
     # We also need the other user's info.
+
+
+
     if not convos:
+
+
+
         return []
+
+
+
     other_ids = list(convos.keys())
+
+
+
     users = await db.find_many("users", {"id": {"$in": other_ids}})
+
+
+
     user_map = {u["id"]: {"id": u["id"], "name": u["name"], "avatar_url": u.get("avatar_url"), "role": u["role"]} for u in users}
+
+
+
     
+
+
+
     result = []
+
+
+
     for other_id, last_msg in convos.items():
+
+
+
         if last_msg.get("encrypted"):
+
+
+
             last_msg["body"] = "🔒 Encrypted message"
+
+
+
         if other_id in user_map:
+
+
+
             result.append({
+
+
+
                 "other_user": user_map[other_id],
+
+
+
                 "last_message": last_msg
+
+
+
             })
+
+
+
     return result
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/messages/{other_id}")
+
+
+
 async def get_messages(other_id: str, user: dict = Depends(current_user)):
+
+
+
     user_id = user["id"]
+
+
+
     # Messages where (sender=user AND receiver=other) OR (sender=other AND receiver=user)
+
+
+
     # PostgREST syntax for complex OR is verbose: or=(and(sender_id.eq.A,receiver_id.eq.B),and(sender_id.eq.B,receiver_id.eq.A))
+
+
+
     # We can just fetch all for current_user and filter in Python, or construct the complex string.
+
+
+
     query = {"$or_string": f"and(sender_id.eq.{user_id},receiver_id.eq.{other_id}),and(sender_id.eq.{other_id},receiver_id.eq.{user_id})"}
+
+
+
     msgs = await db.find_many("messages", query, order_by="created_at", desc=False)
+
+
+
     
+
+
+
     if backend_fernet:
+
+
+
         for m in msgs:
+
+
+
             try:
+
+
+
                 m["body"] = backend_fernet.decrypt(m["body"].encode()).decode()
+
+
+
             except Exception:
+
+
+
                 pass
+
+
+
     
+
+
+
     # Mark as read if user is receiver
+
+
+
     unread_ids = [m["id"] for m in msgs if m["receiver_id"] == user_id and not m["read"]]
+
+
+
     if unread_ids:
+
+
+
         # Bulk update in supabase-py using `in_` filter
+
+
+
         sb = db.get_client()
+
+
+
         sb.table("messages").update({"read": True}).in_("id", unread_ids).execute()
+
+
+
         for m in msgs:
+
+
+
             if m["id"] in unread_ids:
+
+
+
                 m["read"] = True
+
+
+
                 
+
+
+
     return msgs
+
+
+
+
+
+
+
+
+
 
 
 from fastapi import BackgroundTasks
 
+
+
+
+
+
+
 @api_router.post("/messages/{other_id}")
+
+
+
 async def send_message(other_id: str, payload: MessageCreate, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+
+
+
     encrypted_body = payload.body
+
+
+
     if backend_fernet:
+
+
+
         encrypted_body = backend_fernet.encrypt(payload.body.encode()).decode()
 
+
+
+
+
+
+
     msg_data = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "sender_id": user["id"],
+
+
+
         "receiver_id": other_id,
+
+
+
         "body": encrypted_body,
+
+
+
         "encrypted": payload.encrypted,
+
+
+
         "read": False,
+
+
+
         "created_at": now()
+
+
+
     }
+
+
+
     msg = await db.insert_one("messages", msg_data)
+
+
+
     
-    # Trigger push notification in background
-    import push
+
+
+
+    
+
+
+
+    
+
+
+
+    # Return message with payload.body (plaintext to sender) matching GET /messages/{other_id}
+    response_msg = {**msg_data, "body": payload.body}
+    
+    # Trigger push notification & notify row
     try:
         sender_label = "Someone" if user.get("is_anonymous") else user["name"]
-        push_text = "🔒 You have a new encrypted message" if payload.encrypted else f"{sender_label} sent you a message."
-        background_tasks.add_task(push.send_push_to_user, other_id, "New Message", push_text)
+        push_text = "🔒 You have a new encrypted message" if payload.encrypted else f"{sender_label}: {payload.body[:100]}"
+        await notify(
+            other_id,
+            "message",
+            user,
+            push_text,
+            subject_id=msg_data["id"],
+            subject_kind="chat"
+        )
     except Exception as e:
         import logging
-        logging.error(f"Push scheduling failed: {e}")
-    
-    return msg
+        logging.error(f"Message notification failed: {e}")
+
+    return response_msg
+
+
+
+
+
+
+
+
+
+
+
 
 
 class PushTokenCreate(BaseModel):
+
+
+
     token: str
+
+
+
     platform: Optional[str] = None
 
+
+
+
+
+
+
+@api_router.post("/users/push-token")
+async def register_push_token_alias(payload: PushTokenCreate, user: dict = Depends(current_user)):
+    return await register_push_token(payload, user)
+
+
 @api_router.post("/push-tokens")
+
+
+
 async def register_push_token(payload: PushTokenCreate, user: dict = Depends(current_user)):
+
+
+
     # Upsert token
+
+
+
     data = {
+
+
+
         "id": str(uuid.uuid4()),
+
+
+
         "user_id": user["id"],
+
+
+
         "token": payload.token,
+
+
+
         "created_at": now()
+
+
+
     }
+
+
+
     # check if token already exists for this user
+
+
+
     existing = await db.find_many("push_tokens", {"user_id": user["id"], "token": payload.token})
+
+
+
     if not existing:
+
+
+
         await db.insert_one("push_tokens", data)
+
+
+
     return {"ok": True}
+
+
+
+
+
+
 
 @api_router.delete("/push-tokens")
+
+
+
 async def unregister_push_token(token: str, user: dict = Depends(current_user)):
+
+
+
     await db.delete_many("push_tokens", {"user_id": user["id"], "token": token})
+
+
+
     return {"ok": True}
 
+
+
+
+
+
+
 @api_router.get("/users/{user_id}/basic")
+
+
+
 async def get_user_basic(user_id: str, user: dict = Depends(current_user)):
+
+
+
     target = await db.find_one("users", {"id": user_id})
+
+
+
     if not target:
+
+
+
         raise HTTPException(404, "User not found")
+
+
+
     return {"name": target["name"], "avatar_url": target.get("avatar_url")}
+
+
+
+
+
+
+
+
+
 
 
 # ─── E2EE Public Key Exchange ────────────────────────────────────────────────
 
+
+
+
+
+
+
 class E2EEKeyCreate(BaseModel):
+
+
+
     public_key: str
 
+
+
+
+
+
+
 @api_router.post("/e2ee/keys")
+
+
+
 async def upload_e2ee_key(payload: E2EEKeyCreate, user: dict = Depends(current_user)):
+
+
+
     """Store or update the user's E2EE public key on the users table."""
+
+
+
     sb = db.get_client()
+
+
+
     sb.table("users").update({
+
+
+
         "public_key": payload.public_key,
+
+
+
         "public_key_updated_at": now(),
+
+
+
     }).eq("id", user["id"]).execute()
+
+
+
     return {"ok": True}
 
+
+
+
+
+
+
 @api_router.get("/e2ee/keys/{user_id}")
+
+
+
 async def get_e2ee_key(user_id: str, user: dict = Depends(current_user)):
+
+
+
     """Retrieve another user's E2EE public key for encryption."""
+
+
+
     target = await db.find_one("users", {"id": user_id})
+
+
+
     if not target or not target.get("public_key"):
+
+
+
         raise HTTPException(404, "User has not set up E2EE keys yet")
+
+
+
     return {"public_key": target["public_key"]}
 
 
+
+
+
+
+
+
+
+
+
 @api_router.get("/notifications")
+
+
+
 async def get_user_notifications(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+
+
+
     if not credentials:
-        return []
-    try:
-        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
-        user_id = claims.get("sub")
-        items = await db.find_many("notifications", {"recipient_id": user_id})
-        items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return items
-    except Exception:
+
+
+
         return []
 
-@api_router.post("/notifications/read-all")
-async def mark_user_notifications_read(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
-    if not credentials:
-        return {"ok": True}
+
+
     try:
+
+
+
         claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
         user_id = claims.get("sub")
-        sb = db.get_client()
-        sb.table("notifications").update({"read": True}).eq("recipient_id", user_id).execute()
-        return {"ok": True}
+
+
+
+        items = await db.find_many("notifications", {"recipient_id": user_id})
+
+
+
+        items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+
+
+        return items
+
+
+
     except Exception:
+
+
+
+        return []
+
+
+
+
+
+
+
+@api_router.post("/notifications/read-all")
+
+
+
+async def mark_user_notifications_read(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+
+
+
+    if not credentials:
+
+
+
         return {"ok": True}
+
+
+
+    try:
+
+
+
+        claims = jwt.decode(credentials.credentials, jwt_secret(), algorithms=["HS256"])
+
+
+
+        user_id = claims.get("sub")
+
+
+
+        sb = db.get_client()
+
+
+
+        sb.table("notifications").update({"read": True}).eq("recipient_id", user_id).execute()
+
+
+
+        return {"ok": True}
+
+
+
+    except Exception:
+
+
+
+        return {"ok": True}
+
+
+
+
+
+
+
+
+
 
 
 app.include_router(api_router)
+
+
+
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+
 logging.basicConfig(level=logging.INFO)
 
 
+
+
+
+
+
+
+
+
+
 @app.on_event("shutdown")
+
+
+
 async def shutdown_db_client():
+
+
+
     await db.close_db()
+
+
+

@@ -280,28 +280,62 @@ export async function toggleCameraFacing(
 ): Promise<"user" | "environment"> {
   if (!room) return "user";
 
-  // Native React Native WebRTC track switch
-  if (currentTrack?.mediaStreamTrack?._switchCamera) {
+  // Resolve active local video track from participant publications if not passed directly
+  let targetTrack = currentTrack;
+  if (!targetTrack && room?.localParticipant?.videoTrackPublications) {
     try {
-      currentTrack.mediaStreamTrack._switchCamera();
-      return targetFacing || "environment";
+      const pubs = Array.from(room.localParticipant.videoTrackPublications.values()) as any[];
+      targetTrack = pubs[0]?.track || null;
+    } catch {}
+  }
+  if (!targetTrack) {
+    targetTrack = getActiveLocalTrack();
+  }
+
+  // 1. Native React Native WebRTC MediaStreamTrack._switchCamera()
+  const msTrack = targetTrack?.mediaStreamTrack || (targetTrack as any)?._mediaStreamTrack || (targetTrack as any)?.track;
+  if (msTrack && typeof msTrack._switchCamera === "function") {
+    try {
+      msTrack._switchCamera();
+      return targetFacing || (msTrack._settings?.facingMode === "user" ? "environment" : "user");
     } catch (e) {
-      console.warn("native _switchCamera failed:", e);
+      console.warn("native msTrack._switchCamera failed:", e);
     }
   }
 
-  // LiveKit restartTrack with facingMode
-  if (currentTrack?.restartTrack) {
+  if (targetTrack && typeof (targetTrack as any)._switchCamera === "function") {
+    try {
+      (targetTrack as any)._switchCamera();
+      return targetFacing || "environment";
+    } catch (e) {
+      console.warn("native targetTrack._switchCamera failed:", e);
+    }
+  }
+
+  // 2. LiveKit LocalVideoTrack.restartTrack with facingMode
+  if (targetTrack && typeof targetTrack.restartTrack === "function") {
     const nextFacing = targetFacing || "environment";
     try {
-      await currentTrack.restartTrack({ facingMode: nextFacing });
+      await targetTrack.restartTrack({ facingMode: nextFacing });
       return nextFacing;
     } catch (e) {
       console.warn("restartTrack with facingMode failed:", e);
     }
   }
 
-  // Browser device enumeration fallback
+  // 3. Native localParticipant camera re-toggle with facingMode
+  if (room?.localParticipant?.setCameraEnabled) {
+    const nextFacing = targetFacing || "environment";
+    try {
+      await room.localParticipant.setCameraEnabled(false);
+      await room.localParticipant.setCameraEnabled(true, { facingMode: nextFacing });
+      return nextFacing;
+    } catch (e) {
+      console.warn("setCameraEnabled re-toggle failed:", e);
+    }
+  }
+
+  // 4. Browser device enumeration fallback
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();

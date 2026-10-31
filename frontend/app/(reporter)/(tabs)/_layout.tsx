@@ -48,7 +48,7 @@ export default function ReporterTabsLayout() {
       <Tabs.Screen
         name="reels"
         options={{
-          title: "Reels",
+          title: "Video Reports",
           tabBarIcon: ({ color, focused }) => (
             <Icon name={focused ? "videocam" : "videocam-outline"} color={color} size={24} />
           ),

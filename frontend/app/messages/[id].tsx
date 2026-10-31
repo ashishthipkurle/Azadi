@@ -1235,13 +1235,14 @@ export default function ChatScreen() {
     // 3. Send to backend
     try {
       const msg = await apiPost<Message>(`/messages/${otherId}`, { body: ciphertext, encrypted });
+      const safeMsg: Message = { ...msg, body: text };
       setDecryptedMessages((prev) => ({ ...prev, [msg.id]: text }));
       setMessages((prev) => {
         const hasTemp = prev.some((m) => m.id === tempId);
-        if (hasTemp) return prev.map((m) => (m.id === tempId ? msg : m));
+        if (hasTemp) return prev.map((m) => (m.id === tempId ? safeMsg : m));
         const hasMsg = prev.some((m) => m.id === msg.id);
         if (hasMsg) return prev;
-        return [...prev, msg];
+        return [...prev, safeMsg];
       });
     } catch (e) {
       console.error("Message send failed:", e);
@@ -1662,7 +1663,10 @@ export default function ChatScreen() {
                 !!user?.id &&
                 String(item.sender_id || "").toLowerCase().trim() === String(user.id || "").toLowerCase().trim();
               const isTemp = item.id.startsWith("temp-");
-              const dec = item.encrypted ? decryptedMessages[item.id] || "🔒 Decrypting..." : item.body;
+              let dec = decryptedMessages[item.id] || (item.encrypted ? "🔒 Decrypting..." : item.body);
+              if (dec && typeof dec === "string" && dec.startsWith("gAAAAA")) {
+                dec = decryptedMessages[item.id] || "🔒 Encrypted Message";
+              }
 
               const isEncMedia = dec.startsWith("[EMEDIA] ");
               const isLegacyMedia = dec.startsWith("[MEDIA] ");

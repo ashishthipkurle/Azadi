@@ -1,28 +1,26 @@
-// MediaPlayer: renders a Mux-hosted attachment inline.
-//   - Image: <expo-image /> using Mux's thumbnail CDN.
-//   - Video: <expo-video VideoView /> playing the Mux HLS URL. Native platforms
-//     handle HLS natively; on web `expo-video` uses hls.js under the hood.
-//
-// If the attachment doesn't have a playback_id yet (Mux still processing),
-// we show a labeled placeholder so the feed never has broken thumbnails.
-import { useEffect } from "react";
+// MediaPlayer: renders a Mux-hosted or direct attachment inline.
+//   - Image: <expo-image /> using Mux's thumbnail CDN or direct URL.
+//   - Video: <expo-video VideoView /> playing Mux HLS stream or direct URL.
+//   - Skeleton & Thumbnail: Renders animated skeleton placeholder and instant
+//     thumbnail preview while the video buffers so the user never sees a black frame.
+import { useEffect, useState } from "react";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { StyleSheet, Text, View } from "react-native";
 
-import {   } from "@/src/theme";
 import { useTheme } from "@/src/hooks/use-theme";
-import { Icon } from "@/src/ui";
+import { Icon, ReelSkeleton } from "@/src/ui";
 
 export type MediaAttachment = {
   kind: string;
   playback_id?: string;
   url?: string;
   asset_id?: string;
+  thumbnail_url?: string;
 };
 
-const muxImage = (id: string) => `https://image.mux.com/${id}/thumbnail.jpg?width=800&fit_mode=preserve`;
-const muxStream = (id: string) => `https://stream.mux.com/${id}.m3u8`;
+export const muxImage = (id: string) => `https://image.mux.com/${id}/thumbnail.jpg?width=800&fit_mode=preserve`;
+export const muxStream = (id: string) => `https://stream.mux.com/${id}.m3u8`;
 
 export function MediaPlayer({
   media,
@@ -32,6 +30,7 @@ export function MediaPlayer({
   muted = false,
   resetOnPause = false,
   showPlayPauseOverlay = false,
+  onReady,
 }: {
   media: MediaAttachment;
   radius?: number;
@@ -40,6 +39,7 @@ export function MediaPlayer({
   muted?: boolean;
   resetOnPause?: boolean;
   showPlayPauseOverlay?: boolean;
+  onReady?: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -53,29 +53,36 @@ export function MediaPlayer({
     item = item[0];
   }
 
-  if (!item?.playback_id) {
+  if (!item?.playback_id && !item?.url) {
     return (
       <View style={[fill ? styles.placeholderFill : styles.placeholder, { borderRadius: radius }]}>
-        <Icon name={item?.kind === "video" ? "film-outline" : "image-outline"} color={colors.surface} size={24} />
-        <Text style={styles.placeholderText}>Processing…</Text>
+        <ReelSkeleton style={StyleSheet.absoluteFillObject} />
       </View>
     );
   }
-  if (item.kind === "video") {
+
+  const isVideo = item.kind === "video" || !!item.playback_id || (item.url && item.url.match(/\.(mp4|m3u8|mov|webm)$/i));
+
+  if (isVideo) {
     return (
       <VideoTile
         playbackId={item.playback_id}
+        url={item.url}
+        posterUrl={item.thumbnail_url || (item.playback_id ? muxImage(item.playback_id) : undefined)}
         radius={radius}
         fill={fill}
         paused={paused}
         muted={muted}
         resetOnPause={resetOnPause}
+        onReady={onReady}
       />
     );
   }
+
+  const imageUri = item.thumbnail_url || (item.playback_id ? muxImage(item.playback_id) : item.url);
   return (
     <Image
-      source={{ uri: muxImage(item.playback_id) }}
+      source={{ uri: imageUri }}
       style={[fill ? styles.imageFill : styles.image, { borderRadius: radius }]}
       contentFit="cover"
       transition={200}
@@ -85,22 +92,35 @@ export function MediaPlayer({
 
 function VideoTile({
   playbackId,
+  url,
+  posterUrl,
   radius,
   fill,
   paused = false,
   muted = false,
   resetOnPause = false,
+  onReady,
 }: {
-  playbackId: string;
+  playbackId?: string;
+  url?: string;
+  posterUrl?: string;
   radius: number;
   fill?: boolean;
   paused?: boolean;
   muted?: boolean;
   resetOnPause?: boolean;
+  onReady?: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
-  const player = useVideoPlayer(muxStream(playbackId), (p) => {
+  const streamUri = playbackId ? muxStream(playbackId) : (url || "");
+  const thumbnailUri = posterUrl || (playbackId ? muxImage(playbackId) : url);
+
+  const [thumbnailLoaded, setThumbnailLoaded] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
+  const [hasStartedPlaying, setHasStartedPlaying] = useState(false);
+
+  const player = useVideoPlayer(streamUri, (p) => {
     p.loop = true;
     p.muted = muted;
     p.playbackRate = 1;
@@ -113,28 +133,79 @@ function VideoTile({
     player.muted = muted;
   }, [muted, player]);
 
+  // Track player readiness and fire onReady callback
+  useEffect(() => {
+    const handleReady = () => {
+      setIsVideoReady(true);
+      onReady?.();
+    };
+
+    if (player.status === "readyToPlay" || player.playing) {
+      handleReady();
+    }
+
+    const subStatus = player.addListener?.("statusChange", ({ status }: any) => {
+      if (status === "readyToPlay") {
+        handleReady();
+      }
+    });
+
+    const subPlaying = player.addListener?.("playingChange", ({ isPlaying }: any) => {
+      if (isPlaying) {
+        handleReady();
+        setHasStartedPlaying(true);
+      }
+    });
+
+    // Fallback: after 2.5s release queue even if network is slow
+    const fallbackTimer = setTimeout(() => {
+      onReady?.();
+    }, 2500);
+
+    return () => {
+      clearTimeout(fallbackTimer);
+      subStatus?.remove?.();
+      subPlaying?.remove?.();
+    };
+  }, [player, onReady]);
+
   useEffect(() => {
     if (paused) {
       player.pause();
-      if (resetOnPause) {
+      if (resetOnPause && hasStartedPlaying) {
         try {
           player.currentTime = 0;
         } catch {}
       }
     } else {
-      if (resetOnPause) {
-        try {
-          player.currentTime = 0;
-        } catch {}
-      }
       player.play();
     }
-  }, [paused, player, resetOnPause]);
+  }, [paused, player, resetOnPause, hasStartedPlaying]);
 
   return (
     <View style={[fill ? styles.videoFrameFill : styles.videoFrame, { borderRadius: radius }]}>
+      {/* 1. Skeleton Loader: visible until thumbnail or video is ready */}
+      {!thumbnailLoaded && !isVideoReady && (
+        <ReelSkeleton style={StyleSheet.absoluteFillObject} />
+      )}
+
+      {/* 2. Video Thumbnail: immediately visible, prevents black frame */}
+      {thumbnailUri ? (
+        <Image
+          source={{ uri: thumbnailUri }}
+          style={StyleSheet.absoluteFillObject}
+          contentFit="cover"
+          transition={150}
+          onLoad={() => setThumbnailLoaded(true)}
+        />
+      ) : null}
+
+      {/* 3. VideoView: transparent until readyToPlay, smooth transition */}
       <VideoView
-        style={StyleSheet.absoluteFillObject}
+        style={[
+          StyleSheet.absoluteFillObject,
+          !isVideoReady && { opacity: 0 },
+        ]}
         player={player}
         contentFit="cover"
         allowsFullscreen
@@ -156,7 +227,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.dark,
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    overflow: "hidden",
   },
   placeholderFill: {
     flex: 1,
@@ -164,7 +235,7 @@ const createStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.dark,
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    overflow: "hidden",
   },
   placeholderText: { color: colors.surface, fontSize: 12, fontWeight: "700" },
 });

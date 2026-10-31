@@ -3,7 +3,7 @@
 // the single source of truth.
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef } from "react";
-import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import {   } from "@/src/theme";
 import { useTheme } from "@/src/hooks/use-theme";
@@ -177,6 +177,160 @@ export function EmptyState({ title, body, icon }: { title: string; body: string;
     </View>
   );
 }
+
+
+export function ReelSkeleton({ style }: { style?: any }) {
+  const pulseAnim = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.85,
+          duration: 850,
+          useNativeDriver: Platform.OS !== "web",
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.35,
+          duration: 850,
+          useNativeDriver: Platform.OS !== "web",
+        }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [pulseAnim]);
+
+  return (
+    <View style={[skeletonStyles.container, style]} pointerEvents="none">
+      {/* Animated shimmer pulse background */}
+      <Animated.View style={[skeletonStyles.shimmerBg, { opacity: pulseAnim }]} />
+
+      {/* Center media loader badge */}
+      <View style={skeletonStyles.centerBadge}>
+        <Animated.View style={[skeletonStyles.centerIconCircle, { opacity: pulseAnim }]}>
+          <View style={skeletonStyles.playIconTriangle} />
+        </Animated.View>
+      </View>
+
+      {/* Bottom Skeleton Overlays (matching reporter and text placement) */}
+      <View style={skeletonStyles.bottomOverlay} pointerEvents="none">
+        <View style={skeletonStyles.reporterRow}>
+          <Animated.View style={[skeletonStyles.avatarSkeleton, { opacity: pulseAnim }]} />
+          <View style={skeletonStyles.nameBlock}>
+            <Animated.View style={[skeletonStyles.namePill, { opacity: pulseAnim }]} />
+            <Animated.View style={[skeletonStyles.badgePill, { opacity: pulseAnim }]} />
+          </View>
+        </View>
+        <Animated.View style={[skeletonStyles.textLineLong, { opacity: pulseAnim }]} />
+        <Animated.View style={[skeletonStyles.textLineShort, { opacity: pulseAnim }]} />
+      </View>
+
+      {/* Right Action Icons Skeleton */}
+      <View style={skeletonStyles.rightOverlay} pointerEvents="none">
+        <Animated.View style={[skeletonStyles.actionCircle, { opacity: pulseAnim }]} />
+        <Animated.View style={[skeletonStyles.actionCircle, { opacity: pulseAnim }]} />
+        <Animated.View style={[skeletonStyles.actionCircle, { opacity: pulseAnim }]} />
+      </View>
+    </View>
+  );
+}
+
+const skeletonStyles = StyleSheet.create({
+  container: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#0d0d0d",
+    overflow: "hidden",
+  },
+  shimmerBg: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#1c1c1f",
+  },
+  centerBadge: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  centerIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+  },
+  playIconTriangle: {
+    width: 0,
+    height: 0,
+    borderTopWidth: 10,
+    borderTopColor: "transparent",
+    borderBottomWidth: 10,
+    borderBottomColor: "transparent",
+    borderLeftWidth: 16,
+    borderLeftColor: "rgba(255,255,255,0.4)",
+    marginLeft: 4,
+  },
+  bottomOverlay: {
+    position: "absolute",
+    left: 16,
+    bottom: 24,
+    width: "70%",
+    gap: 10,
+  },
+  reporterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  avatarSkeleton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  nameBlock: {
+    gap: 4,
+  },
+  namePill: {
+    width: 110,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  badgePill: {
+    width: 55,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  textLineLong: {
+    width: "90%",
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  textLineShort: {
+    width: "55%",
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  rightOverlay: {
+    position: "absolute",
+    right: 14,
+    bottom: 40,
+    alignItems: "center",
+    gap: 18,
+  },
+  actionCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+});
 
 const createStyles = (colors: any) => StyleSheet.create({
   button: {

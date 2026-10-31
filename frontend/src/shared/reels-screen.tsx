@@ -6,6 +6,7 @@
 import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Image } from "expo-image";
 import {
   FlatList,
   LayoutChangeEvent,
@@ -25,7 +26,7 @@ import { MediaPlayer } from "@/src/media-player";
 import { sharePost } from "@/src/share";
 import { ReelsCommentModal } from "@/src/shared/reels-comment-modal";
 import { LiveReelItem } from "@/src/shared/live-reel-item";
-import { Icon, Toast } from "@/src/ui";
+import { Icon, Toast, ReelSkeleton } from "@/src/ui";
 import { storage } from "@/src/utils/storage";
 import {
   useAppDispatch,
@@ -43,12 +44,14 @@ export type Post = {
   reporter_id: string;
   reporter_name: string;
   reporter_verified: boolean;
+  reporter_avatar?: string;
   media: any[];
   stats?: string;
   comment_count?: number;
 };
 
 export type LiveSession = {
+  id?: string;
   room: string;
   reporter_id: string;
   reporter_name: string;
@@ -83,6 +86,190 @@ export function prepareReelTransition(post: any) {
     ...post,
     media: Array.isArray(mediaArr) ? mediaArr : [],
   };
+}
+
+function VideoReelItem({
+  post,
+  reelHeight,
+  shouldPlay,
+  mountVideo = true,
+  onVideoReady,
+  isLiked,
+  likeCount,
+  commentCount,
+  onLike,
+  onComment,
+  onShare,
+  routePrefix,
+  colors,
+  styles,
+}: {
+  post: Post;
+  reelHeight: number;
+  shouldPlay: boolean;
+  mountVideo?: boolean;
+  onVideoReady?: () => void;
+  isLiked: boolean;
+  likeCount: number;
+  commentCount: number;
+  onLike: () => void;
+  onComment: () => void;
+  onShare: () => void;
+  routePrefix: string;
+  colors: any;
+  styles: any;
+}) {
+  const router = useRouter();
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [reporterAvatar, setReporterAvatar] = useState<string | null>(post.reporter_avatar || null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!reporterAvatar && post.reporter_id) {
+      apiGet<{ name?: string; avatar_url?: string }>(`/users/${post.reporter_id}/basic`)
+        .then((data) => {
+          if (!cancelled && data?.avatar_url) {
+            setReporterAvatar(data.avatar_url);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [post.reporter_id, reporterAvatar]);
+
+  let mediaArr = post.media;
+  if (typeof mediaArr === "string") {
+    try {
+      mediaArr = JSON.parse(mediaArr);
+    } catch {
+      mediaArr = [];
+    }
+  }
+  const media = Array.isArray(mediaArr) && mediaArr.length > 0 ? mediaArr[0] : null;
+
+  // Combine title and body into description
+  const description = post.title
+    ? (post.body && post.body !== post.title ? `${post.title}\n${post.body}` : post.title)
+    : (post.body || "");
+
+  const openReporterProfile = () => {
+    if (post.reporter_id) {
+      router.push({
+        pathname: `${routePrefix}/reporter/[id]` as any,
+        params: { id: post.reporter_id },
+      });
+    }
+  };
+
+  const posterUri = media?.thumbnail_url || (media?.playback_id ? `https://image.mux.com/${media.playback_id}/thumbnail.jpg?width=800&fit_mode=preserve` : media?.url);
+
+  return (
+    <View style={[styles.reelContainer, { height: reelHeight, width: "100%" }]}>
+      {media ? (
+        <View style={StyleSheet.absoluteFillObject}>
+          {mountVideo ? (
+            <MediaPlayer media={media} radius={0} fill paused={!shouldPlay} resetOnPause={true} showPlayPauseOverlay={false} onReady={onVideoReady} />
+          ) : (
+            <View style={StyleSheet.absoluteFillObject}>
+              <ReelSkeleton style={StyleSheet.absoluteFillObject} />
+              {posterUri ? (
+                <Image
+                  source={{ uri: posterUri }}
+                  style={StyleSheet.absoluteFillObject}
+                  contentFit="cover"
+                  transition={150}
+                />
+              ) : null}
+            </View>
+          )}
+        </View>
+      ) : (
+        <ReelSkeleton style={StyleSheet.absoluteFillObject} />
+      )}
+
+      {/* Bottom Details Overlay (Styled like Live Streams) */}
+      <View style={styles.streamDetailsOverlay} pointerEvents="box-none">
+        {/* Reporter profile avatar + name */}
+        <Pressable onPress={openReporterProfile} style={styles.reporterProfileRow}>
+          {reporterAvatar ? (
+            <Image source={{ uri: reporterAvatar }} style={styles.reporterAvatar} />
+          ) : (
+            <View style={[styles.reporterAvatarFallback, { backgroundColor: colors.red }]}>
+              <Text style={styles.reporterAvatarLetter}>
+                {(post.reporter_name || "R").charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.reporterNameWrap}>
+            <View style={styles.reporterNameBadgeRow}>
+              <Text style={styles.reporterNameText} numberOfLines={1}>
+                @{post.reporter_name}
+              </Text>
+              <Icon name="checkmark-circle" color="#2196F3" size={14} />
+            </View>
+            <Text style={styles.reporterLiveTag}>REPORTER</Text>
+          </View>
+        </Pressable>
+
+        {/* Expandable description section below the name */}
+        {description ? (
+          <Pressable
+            onPress={() => setDescExpanded((prev) => !prev)}
+            style={styles.descriptionContainer}
+            hitSlop={6}
+          >
+            <Text
+              style={styles.descriptionText}
+              numberOfLines={descExpanded ? undefined : 2}
+            >
+              {description}
+            </Text>
+            <Text style={styles.descriptionToggleText}>
+              {descExpanded ? "Show less" : "…more"}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {/* Right Interaction Bar */}
+      <View style={styles.overlayRight} pointerEvents="box-none">
+        {/* Like Button */}
+        <Pressable style={styles.actionButton} onPress={onLike} hitSlop={10}>
+          <View style={styles.actionIconCircle}>
+            <Icon
+              name={isLiked ? "heart" : "heart-outline"}
+              color={isLiked ? "#ff2b54" : "#fff"}
+              size={28}
+            />
+          </View>
+          <Text style={[styles.actionText, isLiked && styles.actionTextLiked]}>
+            {likeCount > 0 ? likeCount : "Like"}
+          </Text>
+        </Pressable>
+
+        {/* Comment Button */}
+        <Pressable style={styles.actionButton} onPress={onComment} hitSlop={10}>
+          <View style={styles.actionIconCircle}>
+            <Icon name="chatbubble-outline" color="#fff" size={26} />
+          </View>
+          <Text style={styles.actionText}>
+            {commentCount > 0 ? commentCount : "Comment"}
+          </Text>
+        </Pressable>
+
+        {/* Send / Share Button */}
+        <Pressable style={styles.actionButton} onPress={onShare} hitSlop={10}>
+          <View style={styles.actionIconCircle}>
+            <Icon name="arrow-redo-outline" color="#fff" size={27} />
+          </View>
+          <Text style={styles.actionText}>Send</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
 export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
@@ -257,6 +444,22 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     load();
   }, [load]);
 
+  // Refresh live sessions on focus so ended broadcasts are instantly cleared
+  useEffect(() => {
+    if (isFocused) {
+      apiGet<LiveSession[]>("/live/sessions")
+        .then((live) => {
+          if (live) {
+            setLiveSessions(live);
+            if (activeTab === "live" && live.length > 0 && !visibleLiveRoom) {
+              setVisibleLiveRoom(live[0].room);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isFocused, activeTab, visibleLiveRoom]);
+
   // Ensure visiblePostId or visibleLiveRoom is initialized if not set yet
   useEffect(() => {
     if (activeTab === "videos" && !visiblePostId && posts.length > 0) {
@@ -270,7 +473,7 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
   const viewabilityConfigCallbackPairs = useRef([
     {
       viewabilityConfig: {
-        itemVisiblePercentThreshold: 60,
+        itemVisiblePercentThreshold: 50,
       },
       onViewableItemsChanged: ({ viewableItems }: any) => {
         if (viewableItems && viewableItems.length > 0) {
@@ -303,6 +506,47 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     }
   };
 
+  // Track which posts have finished initial stream buffering
+  const [readyPostIds, setReadyPostIds] = useState<Record<string, boolean>>({});
+
+  const handleVideoReady = useCallback((postId: string) => {
+    setReadyPostIds((prev) => {
+      if (prev[postId]) return prev;
+      return { ...prev, [postId]: true };
+    });
+  }, []);
+
+    // Prefetch thumbnails 2 to 5 reels ahead for instant loading and 0 blank screens
+  useEffect(() => {
+    if (activeTab !== "videos" || posts.length === 0) return;
+    const currentIdx = posts.findIndex((p) => p.id === visiblePostId);
+    const startIdx = currentIdx >= 0 ? currentIdx + 1 : 1;
+    // Preload 2 to 5 reels ahead
+    const upcoming = posts.slice(startIdx, startIdx + 5);
+    const urls: string[] = [];
+
+    for (const p of upcoming) {
+      let mediaArr = p.media;
+      if (typeof mediaArr === "string") {
+        try { mediaArr = JSON.parse(mediaArr); } catch { mediaArr = []; }
+      }
+      const m = Array.isArray(mediaArr) && mediaArr.length > 0 ? mediaArr[0] : null;
+      if (m) {
+        if (m.thumbnail_url) {
+          urls.push(m.thumbnail_url);
+        } else if (m.playback_id) {
+          urls.push(`https://image.mux.com/${m.playback_id}/thumbnail.jpg?width=800&fit_mode=preserve`);
+        } else if (m.url && m.kind === "image") {
+          urls.push(m.url);
+        }
+      }
+    }
+
+    if (urls.length > 0) {
+      urls.forEach((u) => Image.prefetch(u).catch(() => {}));
+    }
+  }, [visiblePostId, posts, activeTab]);
+
   const renderItem = ({ item }: { item: any }) => {
     if (activeTab === "live") {
       const live = item as LiveSession;
@@ -321,19 +565,30 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     }
 
     const post = item as Post;
-    let mediaArr = post.media;
-    if (typeof mediaArr === "string") {
-      try {
-        mediaArr = JSON.parse(mediaArr);
-      } catch {
-        mediaArr = [];
-      }
-    }
-    const media = Array.isArray(mediaArr) && mediaArr.length > 0 ? mediaArr[0] : null;
-
-    // Check if this reel item should be playing
     const isCurrentActive = visiblePostId === post.id;
     const shouldPlay = isFocused && isDocVisible && isCurrentActive && activeTab === "videos";
+
+    const postIndex = posts.findIndex((p) => p.id === post.id);
+    const activeIndex = posts.findIndex((p) => p.id === visiblePostId);
+
+    // Strict priority downloading flow:
+    // 1. Visible reel ALWAYS gets priority and loads first.
+    // 2. Next reel below only begins mounting/downloading AFTER the active reel is ready.
+    // 3. Second reel below only begins after both the active and next reel are ready.
+    // 4. When user scrolls, the new reel immediately takes top priority.
+    let mountVideo = false;
+    if (isCurrentActive) {
+      mountVideo = true;
+    } else if (activeIndex >= 0 && postIndex === activeIndex + 1) {
+      mountVideo = !!readyPostIds[visiblePostId || ""];
+    } else if (activeIndex >= 0 && postIndex === activeIndex + 2) {
+      const nextId = posts[activeIndex + 1]?.id;
+      mountVideo = !!readyPostIds[visiblePostId || ""] && !!(nextId && readyPostIds[nextId]);
+    } else if (activeIndex >= 0 && postIndex === activeIndex - 1) {
+      mountVideo = !!readyPostIds[post.id];
+    } else {
+      mountVideo = false;
+    }
 
     const postInteraction = interactions[post.id];
     const isLiked = postInteraction ? postInteraction.liked : !!(post as any).liked;
@@ -341,69 +596,22 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
     const commentCount = postInteraction ? postInteraction.commentCount : ((post as any).comment_count ?? 0);
 
     return (
-      <View style={[styles.reelContainer, { height: reelHeight, width: "100%" }]}>
-        {media ? (
-          <View style={StyleSheet.absoluteFillObject}>
-            <MediaPlayer media={media} radius={0} fill paused={!shouldPlay} resetOnPause={true} showPlayPauseOverlay={false} />
-          </View>
-        ) : (
-          <View style={styles.videoPlaceholder}>
-            <Icon name="film-outline" color="#555" size={48} />
-          </View>
-        )}
-
-        {/* Bottom Details Overlay */}
-        <View style={styles.overlayBottom} pointerEvents="box-none">
-          <Text style={styles.reporterName}>@{post.reporter_name}</Text>
-          <Text style={styles.videoTitle} numberOfLines={2}>
-            {post.title}
-          </Text>
-          {post.body && post.body !== post.title && (
-            <Text style={styles.videoBody} numberOfLines={2}>
-              {post.body}
-            </Text>
-          )}
-        </View>
-
-        {/* Right Interaction Bar */}
-        <View style={styles.overlayRight} pointerEvents="box-none">
-          {/* Like Button */}
-          <Pressable style={styles.actionButton} onPress={() => toggleLike(post)} hitSlop={10}>
-            <View style={styles.actionIconCircle}>
-              <Icon
-                name={isLiked ? "heart" : "heart-outline"}
-                color={isLiked ? "#ff2b54" : "#fff"}
-                size={28}
-              />
-            </View>
-            <Text style={[styles.actionText, isLiked && styles.actionTextLiked]}>
-              {likeCount > 0 ? likeCount : "Like"}
-            </Text>
-          </Pressable>
-
-          {/* Comment Button */}
-          <Pressable
-            style={styles.actionButton}
-            onPress={() => setActiveCommentPost(post)}
-            hitSlop={10}
-          >
-            <View style={styles.actionIconCircle}>
-              <Icon name="chatbubble-outline" color="#fff" size={26} />
-            </View>
-            <Text style={styles.actionText}>
-              {commentCount > 0 ? commentCount : "Comment"}
-            </Text>
-          </Pressable>
-
-          {/* Send / Share Button */}
-          <Pressable style={styles.actionButton} onPress={() => handleShare(post)} hitSlop={10}>
-            <View style={styles.actionIconCircle}>
-              <Icon name="arrow-redo-outline" color="#fff" size={27} />
-            </View>
-            <Text style={styles.actionText}>Send</Text>
-          </Pressable>
-        </View>
-      </View>
+      <VideoReelItem
+        post={post}
+        reelHeight={reelHeight}
+        shouldPlay={shouldPlay}
+        mountVideo={mountVideo}
+        onVideoReady={() => handleVideoReady(post.id)}
+        isLiked={isLiked}
+        likeCount={likeCount}
+        commentCount={commentCount}
+        onLike={() => toggleLike(post)}
+        onComment={() => setActiveCommentPost(post)}
+        onShare={() => handleShare(post)}
+        routePrefix={routePrefix}
+        colors={colors}
+        styles={styles}
+      />
     );
   };
 
@@ -459,11 +667,17 @@ export default function ReelsScreen({ routePrefix }: { routePrefix: string }) {
           data={activeTab === "videos" ? posts : liveSessions}
           keyExtractor={(item) => (activeTab === "videos" ? item.id : item.room)}
           renderItem={renderItem}
-          pagingEnabled
-          snapToInterval={Platform.OS === "android" ? reelHeight : undefined}
+          pagingEnabled={Platform.OS === "ios"}
+          windowSize={5}
+          maxToRenderPerBatch={2}
+          initialNumToRender={2}
+          removeClippedSubviews={false}
+          snapToInterval={reelHeight}
           snapToAlignment="start"
-          decelerationRate="fast"
+          decelerationRate={Platform.OS === "ios" ? "fast" : 0.982}
           disableIntervalMomentum={true}
+          overScrollMode="never"
+          bounces={false}
           getItemLayout={(_, index) => ({
             length: reelHeight,
             offset: reelHeight * index,
@@ -550,37 +764,87 @@ const createStyles = (colors: any) =>
       alignItems: "center",
       padding: 20,
     },
-    overlayBottom: {
+    streamDetailsOverlay: {
       position: "absolute",
-      left: 16,
-      right: 80,
-      bottom: 28,
+      left: 14,
+      bottom: 24,
+      zIndex: 18,
       gap: 6,
+      maxWidth: "74%",
     },
-    reporterName: {
-      color: "#fff",
+    reporterProfileRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    reporterAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      borderWidth: 1.5,
+      borderColor: "#FFFFFF",
+      backgroundColor: "#222",
+    },
+    reporterAvatarFallback: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: "#FFFFFF",
+    },
+    reporterAvatarLetter: {
+      color: "#FFFFFF",
       fontSize: 16,
-      fontWeight: "700",
-      textShadowColor: "rgba(0,0,0,0.8)",
-      textShadowOffset: { width: 0, height: 1 },
-      textShadowRadius: 3,
+      fontWeight: "800",
     },
-    videoTitle: {
-      color: "#fff",
-      fontSize: 16,
-      fontWeight: "600",
-      lineHeight: 22,
-      textShadowColor: "rgba(0,0,0,0.8)",
-      textShadowOffset: { width: 0, height: 1 },
-      textShadowRadius: 3,
+    reporterNameWrap: {
+      justifyContent: "center",
+      gap: 2,
     },
-    videoBody: {
-      color: "rgba(255,255,255,0.85)",
+    reporterNameBadgeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+    },
+    reporterNameText: {
+      color: "#FFFFFF",
       fontSize: 14,
+      fontWeight: "700",
+      textShadowColor: "rgba(0,0,0,0.85)",
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 4,
+    },
+    reporterLiveTag: {
+      color: "rgba(255, 255, 255, 0.75)",
+      fontSize: 10,
+      fontWeight: "700",
+      letterSpacing: 0.8,
+      textTransform: "uppercase",
+    },
+    descriptionContainer: {
+      marginTop: 2,
+      backgroundColor: "rgba(0, 0, 0, 0.4)",
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      alignSelf: "flex-start",
+      maxWidth: "100%",
+    },
+    descriptionText: {
+      color: "#F0F0F0",
+      fontSize: 13,
       lineHeight: 18,
-      textShadowColor: "rgba(0,0,0,0.8)",
+      textShadowColor: "rgba(0,0,0,0.85)",
       textShadowOffset: { width: 0, height: 1 },
       textShadowRadius: 3,
+    },
+    descriptionToggleText: {
+      color: "#64B5F6",
+      fontSize: 12,
+      fontWeight: "700",
+      marginTop: 2,
     },
     overlayRight: {
       position: "absolute",

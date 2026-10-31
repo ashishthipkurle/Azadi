@@ -626,7 +626,7 @@ export default function Studio() {
       });
       setReelTitle("");
       setReelProgress("idle");
-      setToast({ message: "Video reel published! Readers can see it in the Reels tab.", tone: "success" });
+      setToast({ message: "Video report published! Readers can see it in the Video Reports tab.", tone: "success" });
       await loadPosts();
     } catch (e) {
       setReelProgress("idle");
@@ -693,7 +693,7 @@ export default function Studio() {
             >
               {([
                 { key: "story", label: "Write", icon: "create-outline" },
-                { key: "reel", label: "Reel", icon: "videocam-outline" },
+                { key: "reel", label: "Video Report", icon: "videocam-outline" },
                 { key: "live", label: "Go live", icon: "radio-outline" },
                 { key: "earnings", label: "Earnings", icon: "wallet-outline" },
                 { key: "analytics", label: "Analytics", icon: "bar-chart-outline" },
@@ -869,9 +869,9 @@ export default function Studio() {
             </>
           ) : mode === "reel" ? (
             <>
-              <Text style={styles.title}>Upload a Video Reel</Text>
+              <Text style={styles.title}>Upload a Video Report</Text>
               <Text style={styles.helperText}>
-                Record a video in the field and upload it here. Readers will see it in the Reels tab as a full-screen video.
+                Record a video in the field and upload it here. Readers will see it in the Video Reports tab as a full-screen video.
               </Text>
 
               <View style={styles.cameraPlaceholder}>
@@ -891,7 +891,7 @@ export default function Studio() {
                 testID="reporter-reel-title"
                 value={reelTitle}
                 onChangeText={setReelTitle}
-                placeholder="Give your reel a title (optional)"
+                placeholder="Give your video report a title (optional)"
                 placeholderTextColor="#8A8F91"
                 style={styles.inputTitle}
               />

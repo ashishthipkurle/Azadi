@@ -6,7 +6,7 @@ import { Image } from "expo-image";
 import Hls from "hls.js";
 
 import { useTheme } from "@/src/hooks/use-theme";
-import { Icon } from "@/src/ui";
+import { Icon, ReelSkeleton } from "@/src/ui";
 
 export type MediaAttachment = {
   kind: string;
@@ -26,6 +26,7 @@ export function MediaPlayer({
   muted = true,
   resetOnPause = false,
   showPlayPauseOverlay = false,
+  onReady,
 }: {
   media: MediaAttachment;
   radius?: number;
@@ -34,6 +35,7 @@ export function MediaPlayer({
   muted?: boolean;
   resetOnPause?: boolean;
   showPlayPauseOverlay?: boolean;
+  onReady?: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -65,6 +67,7 @@ export function MediaPlayer({
         mutedProp={muted}
         resetOnPause={resetOnPause}
         showPlayPauseOverlay={showPlayPauseOverlay}
+        onReady={onReady}
       />
     );
   }
@@ -86,6 +89,7 @@ function WebVideoTile({
   mutedProp = true,
   resetOnPause = false,
   showPlayPauseOverlay = false,
+  onReady,
 }: {
   playbackId: string;
   radius: number;
@@ -94,6 +98,7 @@ function WebVideoTile({
   mutedProp?: boolean;
   resetOnPause?: boolean;
   showPlayPauseOverlay?: boolean;
+  onReady?: () => void;
 }) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -132,7 +137,7 @@ function WebVideoTile({
       }
       // Screen is active again: if the user didn't manually pause, resume playing
       if (!userToggledPause) {
-        video.play().then(() => setIsPlaying(true)).catch(() => {
+        onReady?.(); video.play().then(() => setIsPlaying(true)).catch(() => {
           setIsPlaying(false);
         });
       }
@@ -155,7 +160,7 @@ function WebVideoTile({
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!paused && !userToggledPause) {
-          video.play().then(() => setIsPlaying(true)).catch(() => {
+          onReady?.(); video.play().then(() => setIsPlaying(true)).catch(() => {
             setIsPlaying(false);
           });
         }
@@ -197,7 +202,7 @@ function WebVideoTile({
     if (!video) return;
     if (video.paused) {
       setUserToggledPause(false);
-      video.play().then(() => setIsPlaying(true)).catch(() => {});
+      onReady?.(); video.play().then(() => setIsPlaying(true)).catch(() => {});
     } else {
       setUserToggledPause(true);
       video.pause();
@@ -215,12 +220,14 @@ function WebVideoTile({
 
   return (
     <View style={[fill ? styles.videoFrameFill : styles.videoFrame, { borderRadius: radius }]}>
+      <ReelSkeleton style={StyleSheet.absoluteFillObject} />
       <video
         ref={videoRef}
         playsInline
         autoPlay={!paused}
         loop
         muted={muted}
+        poster={muxImage(playbackId)}
         controls={!fill}
         onClick={fill ? togglePlay : undefined}
         style={{
